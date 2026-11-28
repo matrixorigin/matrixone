@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -152,10 +153,11 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 		return err
 	}
 
-	indexMetaBatch, err := buildInsertIndexMetaBatch(tableId, databaseId, ct, eg, proc)
+	indexMetaBatch, err := BuildInsertIndexMetaBatch(tableId, databaseId, ct, nil, eg, proc, nil)
 	if err != nil {
 		return err
 	}
+	defer indexMetaBatch.Clean(proc.Mp())
 	err = relIndex.Write(ctx, indexMetaBatch, InsertIndexMetaAttrs)
 	if err != nil {
 		return err
@@ -187,10 +189,11 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 		},
 	}
 
-	indexMetaBatch, err := buildInsertIndexMetaBatch(tableId, databaseId, ct, eg, proc)
+	indexMetaBatch, err := BuildInsertIndexMetaBatch(tableId, databaseId, ct, nil, eg, proc, nil)
 	if err != nil {
 		return err
 	}
+	defer indexMetaBatch.Clean(proc.Mp())
 	err = relIndex.Write(ctx, indexMetaBatch, InsertIndexMetaAttrs)
 	if err != nil {
 		return err
@@ -219,55 +222,34 @@ var InsertIndexMetaAttrs = []string{
 	MO_INDEX_PRIKEY,
 }
 
-func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
-	bat := &batch.Batch{
-		Vecs: make([]*vector.Vector, len(InsertIndexMetaAttrs)),
+// BuildInsertIndexMetaBatch owns reuse, if supplied, including on failure.
+// Its caller can retain an emptied batch across serial table clones so index
+// metadata does not allocate fresh column backing for every source table.
+func BuildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.ConstraintDef, tableDef *plan.TableDef, eg engine.Engine, proc *process.Process, reuse *batch.Batch) (*batch.Batch, error) {
+	bat := reuse
+	if bat == nil {
+		bat = batch.NewWithSize(16)
+		for i, name := range InsertIndexMetaAttrs[:15] {
+			bat.Vecs[i] = vector.NewVec(MO_INDEX_COLTYPE[name].ToType(), proc.Mp())
+		}
+	} else {
+		bat.CleanOnlyData()
 	}
-
-	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType(), proc.Mp())
-	bat.Vecs[0] = vec_id
-
-	vec_table_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_ID].ToType(), proc.Mp())
-	bat.Vecs[1] = vec_table_id
-
-	vec_database_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_DATABASE_ID].ToType(), proc.Mp())
-	bat.Vecs[2] = vec_database_id
-
-	vec_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_NAME].ToType(), proc.Mp())
-	bat.Vecs[3] = vec_name
-
-	vec_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType(), proc.Mp())
-	bat.Vecs[4] = vec_type
-
-	vec_algo := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM].ToType(), proc.Mp())
-	bat.Vecs[5] = vec_algo
-
-	vec_algo_table_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_TABLE_TYPE].ToType(), proc.Mp())
-	bat.Vecs[6] = vec_algo_table_type
-
-	vec_algo_params := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_PARAMS].ToType(), proc.Mp())
-	bat.Vecs[7] = vec_algo_params
-
-	vec_visible := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType(), proc.Mp())
-	bat.Vecs[8] = vec_visible
-
-	vec_hidden := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType(), proc.Mp())
-	bat.Vecs[9] = vec_hidden
-
-	vec_comment := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType(), proc.Mp())
-	bat.Vecs[10] = vec_comment
-
-	vec_column_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType(), proc.Mp())
-	bat.Vecs[11] = vec_column_name
-
-	vec_ordinal_position := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType(), proc.Mp())
-	bat.Vecs[12] = vec_ordinal_position
-
-	vec_options := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType(), proc.Mp())
-	bat.Vecs[13] = vec_options
-
-	vec_index_table := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType(), proc.Mp())
-	bat.Vecs[14] = vec_index_table
+	vec_id := bat.Vecs[0]
+	vec_table_id := bat.Vecs[1]
+	vec_database_id := bat.Vecs[2]
+	vec_name := bat.Vecs[3]
+	vec_type := bat.Vecs[4]
+	vec_algo := bat.Vecs[5]
+	vec_algo_table_type := bat.Vecs[6]
+	vec_algo_params := bat.Vecs[7]
+	vec_visible := bat.Vecs[8]
+	vec_hidden := bat.Vecs[9]
+	vec_comment := bat.Vecs[10]
+	vec_column_name := bat.Vecs[11]
+	vec_ordinal_position := bat.Vecs[12]
+	vec_options := bat.Vecs[13]
+	vec_index_table := bat.Vecs[14]
 
 	var indexId uint64
 	var err error
@@ -276,6 +258,18 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 			bat.Clean(proc.Mp())
 		}
 	}()
+
+	originName := func(name string) string {
+		if tableDef != nil {
+			for _, col := range tableDef.Cols {
+				if col.Name == name {
+					return col.OriginName
+				}
+			}
+			return name
+		}
+		return catalog.ResolveAlias(name)
+	}
 
 	for _, constraint := range ct.Cts {
 		switch def := constraint.(type) {
@@ -290,8 +284,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 				}
 
 				for i, part := range index.Parts {
-					//NOTE: buildInsertIndexMetaBatch function is used in UT only.
-					part = catalog.ResolveAlias(part)
+					columnName := originName(part)
 					err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
 					if err != nil {
 						return nil, err
@@ -314,7 +307,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					}
 
 					if len(index.IndexAlgo) == 0 {
-						err = vector.AppendBytes(vec_algo, []byte(""), true, proc.Mp())
+						err = vector.AppendBytes(vec_algo, []byte(""), false, proc.Mp())
 					} else {
 						err = vector.AppendBytes(vec_algo, []byte(index.IndexAlgo), false, proc.Mp())
 					}
@@ -323,7 +316,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					}
 
 					if len(index.IndexAlgoTableType) == 0 {
-						err = vector.AppendBytes(vec_algo_table_type, []byte(""), true, proc.Mp())
+						err = vector.AppendBytes(vec_algo_table_type, []byte(""), false, proc.Mp())
 					} else {
 						err = vector.AppendBytes(vec_algo_table_type, []byte(index.IndexAlgoTableType), false, proc.Mp())
 					}
@@ -332,7 +325,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					}
 
 					if len(index.IndexAlgoParams) == 0 {
-						err = vector.AppendBytes(vec_algo_params, []byte(""), true, proc.Mp())
+						err = vector.AppendBytes(vec_algo_params, []byte(""), false, proc.Mp())
 					} else {
 						err = vector.AppendBytes(vec_algo_params, []byte(index.IndexAlgoParams), false, proc.Mp())
 					}
@@ -340,11 +333,24 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 						return nil, err
 					}
 
-					err = vector.AppendFixed(vec_visible, int8(1), false, proc.Mp())
+					visible := int8(0)
+					if show, _ := catalog.GetIndexVisibility(index); show {
+						visible = 1
+					}
+					err = vector.AppendFixed(vec_visible, visible, false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendFixed(vec_hidden, int8(0), false, proc.Mp())
+					hidden := int8(0)
+					if tableDef != nil {
+						for _, col := range tableDef.Cols {
+							if col.Name == part && col.Hidden && col.GeneratedCol != nil {
+								hidden = 1
+								break
+							}
+						}
+					}
+					err = vector.AppendFixed(vec_hidden, hidden, false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
@@ -352,7 +358,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendBytes(vec_column_name, []byte(part), false, proc.Mp())
+					err = vector.AppendBytes(vec_column_name, []byte(columnName), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
@@ -360,7 +366,11 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendBytes(vec_options, []byte(""), true, proc.Mp())
+					options := ""
+					if index.Option != nil && index.Option.ParserName != "" {
+						options = fmt.Sprintf("parser=%s,ngram_token_size=%d", index.Option.ParserName, index.Option.NgramTokenSize)
+					}
+					err = vector.AppendBytes(vec_options, []byte(options), options == "", proc.Mp())
 					if err != nil {
 						return nil, err
 					}
@@ -375,13 +385,13 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseBuildInsertIndexMetaBatch2)
-			defer cancelFunc()
-			indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
-			if err != nil {
-				return nil, moerr.AttachCause(ctx, err)
-			}
 			if def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+				ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseBuildInsertIndexMetaBatch2)
+				defer cancelFunc()
+				indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+				if err != nil {
+					return nil, moerr.AttachCause(ctx, err)
+				}
 				for i, colName := range def.Pkey.Names {
 					err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
 					if err != nil {
@@ -404,15 +414,15 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 						return nil, err
 					}
 
-					err = vector.AppendBytes(vec_algo, []byte(""), true, proc.Mp())
+					err = vector.AppendBytes(vec_algo, []byte(""), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendBytes(vec_algo_table_type, []byte(""), true, proc.Mp())
+					err = vector.AppendBytes(vec_algo_table_type, []byte(""), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendBytes(vec_algo_params, []byte(""), true, proc.Mp())
+					err = vector.AppendBytes(vec_algo_params, []byte(""), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
@@ -429,7 +439,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendBytes(vec_column_name, []byte(colName), false, proc.Mp())
+					err = vector.AppendBytes(vec_column_name, []byte(originName(colName)), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
@@ -456,6 +466,9 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	vecPrikey, err = function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, []*vector.Vector{vec_id, vec_column_name}, vec_id.Length())
 	if err != nil {
 		return nil, err
+	}
+	if bat.Vecs[15] != nil {
+		bat.Vecs[15].Free(proc.Mp())
 	}
 	bat.Vecs[15] = vecPrikey
 

@@ -4753,9 +4753,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 		if existingTableDef == nil {
-			fks, _, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
-			if err != nil {
-				return err
+			var fks map[FkReferKey]map[string][]*FkReferDef
+			admission := cloneTargetAdmissionForPlanning(ctx, createTable.Database, createTable.TableDef.Name)
+			// A CREATE in this set can make an incoming reference visible
+			// to the next table. Stop reusing the empty inventory before
+			// executing any statement that could publish foreign keys.
+			if admission != nil && len(createTable.UpdateFkSqls) != 0 {
+				admission.noReferences = false
+			}
+			if admission == nil || !admission.noReferences {
+				fks, _, err = getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
+				if err != nil {
+					return err
+				}
 			}
 			// for fk forward reference. the column id of the tableDef is not ready.
 			// setup fake column id to distinguish the columns

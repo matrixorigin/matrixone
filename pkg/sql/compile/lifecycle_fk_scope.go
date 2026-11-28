@@ -591,6 +591,11 @@ func (c *Compile) pinCreateNames(q *plan.CreateTable, database string) (bool, er
 	if err != nil {
 		return false, err
 	}
+	if !createTablePublishesForeignKeys(q) && len(q.GetUnresolvedFkParents()) == 0 &&
+		plan2.OwnsCloneTargetName(c.proc.Ctx, c.proc.GetTxnOperator(), actor, database, q.TableDef.Name) {
+		c.createNamePinsAdmitted = true
+		return false, nil
+	}
 	snapshot, err := c.proc.GetTxnOperator().Snapshot()
 	if err != nil {
 		return false, err

@@ -1001,18 +1001,20 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		}
 	}()
 
-	// Two entries on the same table are enough to create a nil hole during merge.
-	// The remaining distinct-table inserts push the merge count over the threshold
-	// used by mergeTxnWorkspaceLocked.
+	// Interleave two multi-batch tables. The two tables use the same numeric
+	// ID in different databases to check the complete physical identity.
 	for i := 0; i < 30; i++ {
-		tableID := uint64(1000 + i)
-		if i == 1 {
+		database, tableID := dbID, uint64(1000+i)
+		switch i {
+		case 0, 2:
 			tableID = 1000
+		case 1, 3:
+			database, tableID = dbID+1, 1000
 		}
 		appendWorkspaceEntryForTest(t, txn, Entry{
 			typ:          INSERT,
 			tableId:      tableID,
-			databaseId:   dbID,
+			databaseId:   database,
 			tableName:    "t",
 			databaseName: "db",
 			bat:          newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
@@ -1041,6 +1043,8 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Equal(t, []int64{0, 2}, vector.MustFixedColNoTypeCheck[int64](txn.writes[0].bat.Vecs[1]))
+	require.Equal(t, []int64{1, 3}, vector.MustFixedColNoTypeCheck[int64](txn.writes[1].bat.Vecs[1]))
 
 	createIdx, dataIdx := -1, -1
 	for i, e := range txn.writes {

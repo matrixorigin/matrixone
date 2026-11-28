@@ -3213,7 +3213,7 @@ func TestObserveExecutionResourceBudgetUsesGenerationSnapshot(t *testing.T) {
 	mp.Free(allocation)
 
 	analyzer := process.NewAnalyzer(0, false, false, "hash build")
-	observeExecutionResourceBudget(analyzer, generation)
+	observeExecutionResourceBudget(analyzer, generation.Snapshot())
 	extra := analyzer.GetOpStats().ExtraStats
 	require.Equal(t, int64(1024), extra["QueryHashBudgetCapBytes"])
 	require.Equal(t, int64(128), extra["QueryHashBudgetPeakBytes"])
@@ -3221,7 +3221,7 @@ func TestObserveExecutionResourceBudgetUsesGenerationSnapshot(t *testing.T) {
 	require.Equal(t, int64(1), extra["QueryHashBudgetReserves"])
 
 	// Sampling the same cumulative generation again must not double count.
-	observeExecutionResourceBudget(analyzer, generation)
+	observeExecutionResourceBudget(analyzer, generation.Snapshot())
 	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
 	generation.Close()
 	account.Seal()

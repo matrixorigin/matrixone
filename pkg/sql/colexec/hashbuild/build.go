@@ -78,9 +78,12 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.autoSpillLimitAtTrigger = 0
 	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
-	budget, err := proc.GetExecutionResourceBudget()
-	if err != nil {
-		return TerminalBudgetError(proc.Ctx, err)
+	var budget *process.ExecutionResourceGeneration
+	if hashBuild.IsShuffle && hashBuild.NeedHashMap {
+		budget, err = proc.GetExecutionResourceBudget()
+		if err != nil {
+			return TerminalBudgetError(proc.Ctx, err)
+		}
 	}
 	hashBuild.ctr.hashmapBuilder.setBudget(budget)
 	// Key-only consumers also stage input batches while building the hash map.
@@ -361,7 +364,7 @@ func (hashBuild *HashBuild) build(
 	}
 
 	defer func() {
-		observeExecutionResourceBudget(analyzer, ctr.hashmapBuilder.budget)
+		observeExecutionResourceBudget(analyzer, proc.ExecutionResourceSnapshot())
 		for _, f := range spillFiles {
 			if f != nil {
 				f.Close()
@@ -689,11 +692,10 @@ func (hashBuild *HashBuild) build(
 	return nil
 }
 
-func observeExecutionResourceBudget(analyzer process.Analyzer, budget *process.ExecutionResourceGeneration) {
-	if analyzer == nil || budget == nil {
+func observeExecutionResourceBudget(analyzer process.Analyzer, snapshot process.ExecutionResourceGenerationSnapshot) {
+	if analyzer == nil {
 		return
 	}
-	snapshot := budget.Snapshot()
 	stats := analyzer.GetOpStats()
 	// These are query-CN generation snapshots, not operator-local sums. Keep
 	// maxima so repeated sampling by one operator cannot double count them.

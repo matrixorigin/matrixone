@@ -36,6 +36,7 @@ import (
 )
 
 const moIndexesColumnList = "(id, table_id, database_id, name, type, algo, algo_table_type, algo_params, is_visible, hidden, comment, column_name, ordinal_position, options, index_table_name)"
+const insertMOIndexesPrefix = "insert into mo_catalog.mo_indexes " + moIndexesColumnList + " values"
 
 // resolveVariableOrDefault wraps proc.GetResolveVariableFunc() with a
 // nil-safe fallback to executor.DefaultResolveVariable (populated from
@@ -324,9 +325,7 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
 func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef, tableDef *plan.TableDef) (string, error) {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
-	buffer.WriteString("insert into mo_catalog.mo_indexes ")
-	buffer.WriteString(moIndexesColumnList)
-	buffer.WriteString(" values")
+	buffer.WriteString(insertMOIndexesPrefix)
 
 	getOriginName := func(name string) string {
 		if idx, ok := tableDef.Name2ColIndex[name]; ok {

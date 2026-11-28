@@ -740,7 +740,7 @@ type Transaction struct {
 	pkCount              int
 
 	haveDDL             atomic.Bool
-	isCloneTxn          bool
+	isCloneTxn          atomic.Bool
 	loadFiles           map[int]map[string]struct{}
 	loadCleanupTimeout  time.Duration
 	isCCPRTxn           bool
@@ -753,8 +753,12 @@ type Transaction struct {
 }
 
 func (txn *Transaction) SetCloneTxn(snapshot int64) {
-	txn.isCloneTxn = true
+	txn.Lock()
+	defer txn.Unlock()
+	// AddTxn initializes the shared-file trees with a read-then-insert.
+	// Only one table operator may initialize them for this transaction.
 	txn.engine.cloneTxnCache.AddTxn(txn.op.Txn().ID, snapshot)
+	txn.isCloneTxn.Store(true)
 }
 
 // ProtectCloneFiles records pre-existing objects reused by a clone-like write.
@@ -1427,7 +1431,7 @@ var gcFilesAfterAdmit func()
 func filterGCNamesLocked(
 	e *Engine, txn *Transaction, scope cloneGCScope, names []string,
 ) []string {
-	if !txn.isCloneTxn {
+	if !txn.isCloneTxn.Load() {
 		return names
 	}
 	return slices.DeleteFunc(names, func(name string) bool {
@@ -1458,7 +1462,7 @@ func filterGCNamesLocked(
 // deletes them — exactly the r21/r22 definite-orphan semantics they
 // keep through every retain and handoff path.
 func borrowsCommittedCloneShare(e *Engine, txn *Transaction, name string) bool {
-	if e == nil || !txn.isCloneTxn {
+	if e == nil || !txn.isCloneTxn.Load() {
 		return false
 	}
 	return e.cloneTxnCache.IsSharedFile(txn.op.Txn().ID, name)

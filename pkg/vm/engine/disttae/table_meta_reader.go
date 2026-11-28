@@ -81,7 +81,39 @@ type TableMetaReader struct {
 	// destination (recording) transaction's option through the
 	// constructor; an unbound reader keeps the pre-fix unhooked writers,
 	// exactly like the other producer families' forward-compat stance.
-	sinkerOption ioutil.SinkerOption
+	sinkerOption   ioutil.SinkerOption
+	writeCloneRows func(*batch.Batch) error
+}
+
+// UseCloneRowWrites stages rewritten rows in the destination transaction,
+// where normal workspace limits govern spilling. This applies only to local
+// clones with identical physical column layouts. Immutable objects and their
+// tombstones still go through the object-sharing path.
+func (r *TableMetaReader) UseCloneRowWrites(ctx context.Context, destination engine.Relation) {
+	target := cloneSourceTable(destination)
+	if r.table.accountId != target.accountId || target.db.op.IsSnapOp() {
+		return
+	}
+	sourceDef, targetDef := r.table.GetTableDef(ctx), target.GetTableDef(ctx)
+	if len(sourceDef.Cols) != len(targetDef.Cols) {
+		return
+	}
+	attrs := make([]string, 0, len(targetDef.Cols)-1)
+	for i, src := range sourceDef.Cols {
+		dst := targetDef.Cols[i]
+		if src.Name != dst.Name || src.Typ.Enumvalues != dst.Typ.Enumvalues ||
+			!types.MustTypeFromPlan(src.Typ).Eq(types.MustTypeFromPlan(dst.Typ)) {
+			return
+		}
+		if dst.Name != catalog.Row_ID {
+			// The planner normalizes Name, but TN's physical schema retains
+			// OriginName, including mixed-case and information_schema columns.
+			attrs = append(attrs, dst.GetOriginCaseName())
+		}
+	}
+	r.writeCloneRows = func(rows *batch.Batch) error {
+		return destination.Write(ctx, rows, attrs)
+	}
 }
 
 func (r *TableMetaReader) GetTableDef() *plan.TableDef {
@@ -137,6 +169,13 @@ func NewImmutableTableMetaReader(
 	return reader, nil
 }
 
+func cloneSourceTable(relation engine.Relation) *txnTable {
+	if table, ok := relation.(*txnTable); ok {
+		return table
+	}
+	return relation.(*txnTableDelegate).origin
+}
+
 func newTableMetaReader(
 	ctx context.Context,
 	rel engine.Relation,
@@ -145,7 +184,6 @@ func newTableMetaReader(
 ) (engine.Reader, error) {
 
 	var (
-		ok  bool
 		err error
 
 		fs        fileservice.FileService
@@ -157,9 +195,7 @@ func newTableMetaReader(
 		table *txnTable
 	)
 
-	if table, ok = rel.(*txnTable); !ok {
-		table = rel.(*txnTableDelegate).origin
-	}
+	table = cloneSourceTable(rel)
 
 	//tblDef = table.GetTableDef(ctx)
 	fs = table.getTxn().proc.GetFileService()
@@ -244,6 +280,14 @@ func (r *TableMetaReader) Read(
 			r.state = endState
 		}
 
+		level := zap.DebugLevel
+		if err != nil {
+			level = zap.ErrorLevel
+		}
+		entry := logutil.GetGlobalLogger().Check(level, "TableMetaReader")
+		if entry == nil {
+			return
+		}
 		logs = append(logs, zap.String("table",
 			fmt.Sprintf("%s(%d)-%s(%d)-%s",
 				r.table.db.databaseName, r.table.db.databaseId,
@@ -253,7 +297,7 @@ func (r *TableMetaReader) Read(
 		logs = append(logs, zap.String("state", stateStr))
 		logs = append(logs, zap.Error(err))
 
-		logutil.Info("TableMetaReader", logs...)
+		entry.Write(logs...)
 	}()
 
 	outBatch.CleanOnlyData()
@@ -482,31 +526,6 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	objRelData readutil.ObjListRelData,
 ) (log zap.Field, err error) {
 
-	var (
-		dataReader engine.Reader
-		s3Writer   *colexec.CNS3Writer
-
-		objCnt, blkCnt, rowCnt int
-	)
-
-	s3Writer = colexec.NewCNS3DataWriterForService(
-		r.table.getTxn().proc.GetService(), mp, r.fs, r.table.tableDef, -1, false,
-		// round-32 review, finding 2: the data-materializing family joins
-		// the recording transaction's per-object admission - one
-		// in-flight unit per object BEFORE it goes durable, converted by
-		// the same record choke that admits the destination relation's
-		// metadata batch (issue #25590 invariant I4). The spread skips
-		// the option when nil so an unbound reader keeps its hookless
-		// pre-fix writer (round-33 review, finding 1).
-		r.sinkerOptions()...,
-	)
-	defer func() {
-		if dataReader != nil {
-			dataReader.Close()
-		}
-		err = s3Writer.CloseWithCleanup(ctx, err)
-	}()
-
 	source, err := NewLocalDataSource(
 		ctx,
 		r.table,
@@ -528,12 +547,34 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	// txn visibility rules as regular table reads.
 	source.snapshotTS = r.snapshot
 
-	dataReader = readutil.SimpleReaderWithDataSource(
+	dataReader := readutil.SimpleReaderWithDataSource(
 		ctx, r.fs,
 		source, r.snapshot.ToTimestamp(),
 		readutil.WithColumns(seqnums, colTypes),
 	)
 
+	defer dataReader.Close()
+	if r.writeCloneRows != nil {
+		err = readCloneBatches(ctx, dataReader, mp, attrs, colTypes, func(rows *batch.Batch) error {
+			return r.writeCloneRows(rows)
+		})
+		return zap.Skip(), err
+	}
+
+	s3Writer := colexec.NewCNS3DataWriterForService(
+		r.table.getTxn().proc.GetService(), mp, r.fs, r.table.tableDef, -1, false,
+		// round-32 review, finding 2: the data-materializing family joins
+		// the recording transaction's per-object admission - one
+		// in-flight unit per object BEFORE it goes durable, converted by
+		// the same record choke that admits the destination relation's
+		// metadata batch (issue #25590 invariant I4). The spread skips
+		// the option when nil so an unbound reader keeps its hookless
+		// pre-fix writer (round-33 review, finding 1).
+		r.sinkerOptions()...,
+	)
+	defer func() { err = s3Writer.CloseWithCleanup(ctx, err) }()
+
+	var objCnt, blkCnt, rowCnt int
 	if objCnt, blkCnt, rowCnt, err = readWriteHelper(
 		ctx, dataReader, outBatch, mp, attrs, colTypes, s3Writer,
 	); err != nil {
@@ -574,23 +615,13 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 		objCnt, blkCnt, rowCnt int
 	)
 
-	s3Writer = colexec.NewCNS3TombstoneWriterForService(
-		r.table.getTxn().proc.GetService(), mp, r.fs, colTypes[1], -1,
-		// round-32 review, finding 2: the tombstone-materializing family
-		// joins the recording transaction's per-object admission through
-		// the SAME option the data family carries - both writers a
-		// materializing pass builds reserve before persistence and the
-		// record choke converts (issue #25590 invariant I4). The spread
-		// skips the option when nil so an unbound reader keeps its
-		// hookless pre-fix writer (round-33 review, finding 1).
-		r.sinkerOptions()...,
-	)
-
 	defer func() {
 		if iter != nil {
 			iter.Close()
 		}
-		err = s3Writer.CloseWithCleanup(ctx, err)
+		if s3Writer != nil {
+			err = s3Writer.CloseWithCleanup(ctx, err)
+		}
 
 		if tombstoneReader != nil {
 			tombstoneReader.Close()
@@ -651,6 +682,22 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 		}
 	}
 
+	if rowsBatch == nil && objRelData.DataCnt() == 0 {
+		return zap.Skip(), nil
+	}
+
+	s3Writer = colexec.NewCNS3TombstoneWriterForService(
+		r.table.getTxn().proc.GetService(), mp, r.fs, colTypes[1], -1,
+		// round-32 review, finding 2: the tombstone-materializing family
+		// joins the recording transaction's per-object admission through
+		// the SAME option the data family carries - both writers a
+		// materializing pass builds reserve before persistence and the
+		// record choke converts (issue #25590 invariant I4). The spread
+		// skips the option when nil so an unbound reader keeps its
+		// hookless pre-fix writer (round-33 review, finding 1).
+		r.sinkerOptions()...,
+	)
+
 	if rowsBatch != nil {
 		rowsBatch.SetRowCount(rowsBatch.Vecs[0].Length())
 		if err = s3Writer.Write(ctx, rowsBatch); err != nil {
@@ -678,6 +725,37 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 	return log, nil
 }
 
+func readCloneBatches(
+	ctx context.Context,
+	reader engine.Reader,
+	mp *mpool.MPool,
+	attrs []string,
+	colTypes []types.Type,
+	write func(*batch.Batch) error,
+) error {
+	if reader == nil {
+		return nil
+	}
+	data := batch.NewWithSize(len(attrs))
+	for i, typ := range colTypes {
+		data.Vecs[i] = vector.NewVec(typ, mp)
+	}
+	defer data.Clean(mp)
+
+	for {
+		data.CleanOnlyData()
+		end, err := reader.Read(ctx, attrs, nil, mp, data)
+		if err != nil || end {
+			return err
+		}
+		if data.RowCount() > 0 {
+			if err := write(data); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func readWriteHelper(
 	ctx context.Context,
 	reader engine.Reader,
@@ -687,43 +765,17 @@ func readWriteHelper(
 	colTypes []types.Type,
 	s3Writer *colexec.CNS3Writer,
 ) (objCnt, blkCnt, rowCnt int, err error) {
+	err = readCloneBatches(ctx, reader, mp, attrs, colTypes, func(rows *batch.Batch) error {
+		return s3Writer.Write(ctx, rows)
+	})
+	if err != nil {
+		return
+	}
 
 	var (
-		stop      bool
-		sl        []objectio.ObjectStats
-		tmpBat    *batch.Batch
-		dataBatch *batch.Batch
+		sl     []objectio.ObjectStats
+		tmpBat *batch.Batch
 	)
-
-	defer func() {
-		if dataBatch != nil {
-			dataBatch.Clean(mp)
-		}
-	}()
-
-	if reader != nil {
-		dataBatch = batch.NewWithSize(len(attrs))
-		for i := 0; i < len(attrs); i++ {
-			dataBatch.Vecs[i] = vector.NewVec(colTypes[i], mp)
-		}
-
-		for {
-			dataBatch.CleanOnlyData()
-			if stop, err = reader.Read(ctx, attrs, nil, mp, dataBatch); err != nil {
-				return
-			}
-
-			if stop {
-				break
-			}
-
-			if dataBatch.RowCount() > 0 {
-				if err = s3Writer.Write(ctx, dataBatch); err != nil {
-					return
-				}
-			}
-		}
-	}
 
 	if sl, err = s3Writer.Sync(ctx); err != nil {
 		return

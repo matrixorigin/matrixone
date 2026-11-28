@@ -1982,9 +1982,113 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	if err != nil {
 		return err
 	}
+	if updated, err := tbl.updateCreatingConstraint(ctx, c, ct); updated || err != nil {
+		return err
+	}
 	req := api.NewUpdateConstraintReq(tbl.db.databaseId, tbl.tableId, string(ct))
-
 	return tbl.AlterTable(ctx, c, []*api.AlterTableReq{req})
+}
+
+// A CREATE and its initial FK updates belong to one statement. Before that
+// statement ends, its private mo_tables INSERT can carry the final constraint
+// without deleting and regenerating every column and logical-ID index row.
+// Earlier-statement creates keep the ALTER path and its rollback history.
+func (tbl *txnTable) updateCreatingConstraint(ctx context.Context, constraint *engine.ConstraintDef, encoded []byte) (bool, error) {
+	if tbl.source.Valid() || tbl.fake || tbl.remoteWorkspace || catalog.IsSystemTable(tbl.tableId) {
+		return false, nil
+	}
+	previous := new(engine.ConstraintDef)
+	if err := previous.UnmarshalBinary(tbl.constraint); err != nil {
+		return false, err
+	}
+	withoutReferences := func(def *engine.ConstraintDef) ([]byte, error) {
+		stable := new(engine.ConstraintDef)
+		for _, entry := range def.Cts {
+			switch entry.(type) {
+			case *engine.ForeignKeyDef, *engine.RefChildTableDef:
+			default:
+				stable.Cts = append(stable.Cts, entry)
+			}
+		}
+		return stable.MarshalBinary()
+	}
+	oldStable, err := withoutReferences(previous)
+	if err != nil {
+		return false, err
+	}
+	newStable, err := withoutReferences(constraint)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(oldStable, newStable) {
+		return false, nil
+	}
+	txn := tbl.getTxn()
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
+	txn.Lock()
+	defer txn.Unlock()
+	key := genTableKey(tbl.accountId, tbl.tableName, tbl.db.databaseId, tbl.db.databaseName)
+	txn.tableOps.RLock()
+	ops := txn.tableOps.names[key]
+	current := len(ops) != 0 && ops[len(ops)-1].kind == INSERT &&
+		ops[len(ops)-1].statementId == txn.statementID &&
+		ops[len(ops)-1].payload == tbl
+	created, exists := txn.tableOps.creatdInTxn[tbl.tableId]
+	txn.tableOps.RUnlock()
+	if !current || !exists || created != txn.statementID {
+		return false, nil
+	}
+	start := 0
+	if txn.statementID > 0 {
+		start = txn.offsets[txn.statementID-1]
+	}
+	for i := len(txn.writes) - 1; i >= start; i-- {
+		entry := &txn.writes[i]
+		if entry.typ != INSERT || entry.databaseId != catalog.MO_CATALOG_ID ||
+			entry.tableId != catalog.MO_TABLES_ID || entry.bat == nil || entry.fileName != "" {
+			continue
+		}
+		bat := entry.bat
+		ids := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[catalog.MO_TABLES_REL_ID_IDX+1])
+		for row, id := range ids {
+			if id != tbl.tableId {
+				continue
+			}
+			// A pending deletion means this catalog generation is already
+			// being replaced. Its owning mutation must retain the normal path.
+			if len(txn.batchSelectList[bat]) != 0 {
+				return false, nil
+			}
+			slot := catalog.MO_TABLES_CONSTRAINT_IDX + 1
+			value, err := bat.Vecs[slot].CloneToFlatCompact(txn.workspaceMP())
+			if err != nil {
+				return true, err
+			}
+			if err = vector.SetBytesAt(value, row, encoded, txn.workspaceMP()); err != nil {
+				value.Free(txn.workspaceMP())
+				return true, err
+			}
+			// The primary key and row layout are unchanged. Preserve their
+			// probe index while replacing only the owned constraint vector.
+			txn.unaccountWorkspaceEntryLocked(entry)
+			bat.Vecs[slot].Free(txn.workspaceMP())
+			bat.Vecs[slot] = value
+			txn.accountWorkspaceEntryLocked(entry)
+			defs := make([]engine.TableDef, 0, len(tbl.defs)+1)
+			for _, def := range tbl.defs {
+				if _, isConstraint := def.(*engine.ConstraintDef); !isConstraint {
+					defs = append(defs, def)
+				}
+			}
+			defs = append(defs, constraint)
+			tbl.defs = defs
+			tbl.constraint = encoded
+			tbl.refreshTableDef(ctx)
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {

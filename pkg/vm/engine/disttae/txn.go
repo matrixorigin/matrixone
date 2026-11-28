@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	gotrace "runtime/trace"
 	"slices"
 	"strings"
 	"sync"
@@ -651,6 +652,30 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 
 	txn.Lock()
 	defer txn.Unlock()
+	return txn.appendBatchLocked(Entry{
+		typ:                typ,
+		accountId:          accountId,
+		bat:                bat,
+		attrs:              attrs,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		tnStore:            tnStore,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
+		note:               note,
+		pkCheckPos:         pkCheckPos,
+		pkCheckReady:       pkCheckReady,
+	})
+}
+
+// appendBatchLocked publishes an already workspace-owned batch. The caller
+// holds txn.Lock; table-create catalog pairs use the same append path atomically.
+func (txn *Transaction) appendBatchLocked(e Entry) (genRowidVec *vector.Vector, err error) {
+	typ, bat := e.typ, e.bat
+	attrs := e.attrs
+	databaseName, tableName := e.databaseName, e.tableName
 	// generate rowid for insert
 	// TODO(aptend): move this outside WriteBatch? Call twice for the same batch will generate different rowid
 	if typ == INSERT {
@@ -720,7 +745,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		}
 	}
 
-	if typ == DELETE && !catalog.IsSystemTable(tableId) &&
+	if typ == DELETE && !catalog.IsSystemTable(e.tableId) &&
 		bat != nil && bat.RowCount() > 1 {
 
 		// attr: row_id, pk
@@ -732,22 +757,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		bat.Vecs[1].SetSorted(true)
 	}
 
-	e := Entry{
-		typ:                typ,
-		accountId:          accountId,
-		bat:                bat,
-		attrs:              attrs,
-		tableId:            tableId,
-		databaseId:         databaseId,
-		tableName:          tableName,
-		databaseName:       databaseName,
-		tnStore:            tnStore,
-		autoIncrEpoch:      autoIncrEpoch,
-		autoIncrEpochKnown: autoIncrEpochKnown,
-		note:               note,
-		pkCheckPos:         pkCheckPos,
-		pkCheckReady:       pkCheckReady,
-	}
+	e.attrs = attrs
 	txn.computeInsertKeyRangeLocked(&e)
 	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
@@ -2583,6 +2593,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		}
 	}
 
+	dumpOffset := offset
 	dumpAll := offset < 0
 	if dumpAll {
 		offset = 0
@@ -2670,7 +2681,10 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	// what it owns, only the stream that would add more obligations
 	// stops, and it resumes the moment a drain retires work.
 
-	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &pkCount); err != nil {
+	if !dumpAll {
+		dumpOffset = offset
+	}
+	if err := txn.dumpInsertBatchLocked(ctx, fs, dumpOffset, &pkCount); err != nil {
 		return err
 	}
 	// release the extra quota
@@ -2783,6 +2797,11 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	pkCount *int,
 ) (err error) {
 
+	// Only the terminal dump can use several writers. Statement admission
+	// retains its existing order and its individual rollback boundaries.
+	parallel := offset < 0
+	offset = max(0, offset)
+
 	// Check if force flush is enabled
 	forceFlush := objectio.CNWorkspaceForceFlushInjected()
 
@@ -2791,7 +2810,9 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	// Resolve every table that will be flushed BEFORE mutating txn.writes:
 	// getTable must never run while this goroutine holds the lock. See
 	// resolveDumpTablesLocked for the window contract.
+	resolveRegion := gotrace.StartRegion(ctx, "txn spill resolve tables")
 	tables, ok, err := txn.resolveDumpTablesLocked(ctx, offset, skipTable, INSERT)
+	resolveRegion.End()
 	if err != nil {
 		return err
 	}
@@ -2854,164 +2875,183 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	// survive the retirement compaction below.
 	stagedEnd := len(txn.writes)
 
-	var (
-		stats    []objectio.ObjectStats
-		s3Writer *colexec.CNS3Writer
-		fileName string
-		bat      *batch.Batch
-	)
+	type spill struct {
+		key      workspaceTableKey
+		writer   *colexec.CNS3Writer
+		table    *txnTable
+		batch    *batch.Batch
+		location string
+		err      error
+	}
 
-	defer func() {
-		if s3Writer != nil {
-			err = s3Writer.CloseWithCleanup(ctx, err)
-		}
-	}()
-
-	// publishTable flushes one staged table out and records its replacement
-	// file entries. It is fallible without side effects on staging: on a
-	// pre-recording error, exactly this table's publication is abandoned
-	// and nobody touches the workspace before the epilogue below. A
-	// published report means the replacement entry is recorded — such a
-	// table retires its sources even if a post-recording error follows.
-	publishTable := func(tbKey workspaceTableKey) (published bool, err error) {
+	// The workers only read their sources and persist objects. Their capacity
+	// reservations use the existing per-object ledger. Workspace recording and
+	// source retirement are serial and remain under the transaction lock.
+	prepare := func(ctx context.Context, candidate *spill) {
 		defer func() {
-			if published || err == nil || s3Writer == nil {
-				return
-			}
-			// This publication stopped before its replacement file entry
-			// was recorded, so its storage objects are recorded nowhere:
-			// the file entry the workspace GC walks was the recording, and
-			// s3Writer.Close below drops the sinker's persisted references
-			// without deleting the files. Take their names over here — the
-			// only remaining owner — and delete NOTHING on this path: this
-			// epilogue runs inside the statement's admission with the
-			// transaction lock held, and a file service whose deletion a
-			// stalled context cannot move must not park the statement, the
-			// statements behind the lock, or rollback with it (issue
-			// #25590 round-15 review). The names transfer to the
-			// asynchronous cleanup owner: the transaction lists them and
-			// counts them into the engine's live-orphan accounting now, and
-			// the next statement boundary's handoff — or the terminal one —
-			// moves them to the engine queue whose own drain deletes them.
-			files := s3Writer.AbandonAndRetainableNames()
-			s3Writer.Close()
-			s3Writer = nil
-			if len(files) > 0 {
-				// r5 (round-21 review): a failed dump epilogue's names are
-				// DEFINITE orphans — the publication failed and the retry
-				// replaces them with fresh objects, so no recording consumer
-				// can ever land for these names — they keep the round-14
-				// immediate-transfer semantics (retainedIfRecordingLater
-				// false).
-				for _, n := range files {
-					txn.pendingObjectCleanup = append(txn.pendingObjectCleanup,
-						pendingObjectCleanupItem{name: n})
-				}
-				// The names enter the engine's live-orphan accounting the
-				// admission bound consults: orphans still owned by an
-				// ACTIVE transaction are part of the retained backlog
-				// long before any handoff, or an explicit transaction's
-				// repeated failures could grow its own backlog without
-				// limit while the engine queue stays empty (issue #25590
-				// round-12 review). The count joins, like every other
-				// accounting transition, under the queue's mutex (issue
-				// #25590 round-13 review). Round 18 pairs the retention
-				// with its reservations: every persisted name below
-				// consumed one per-object capacity reservation when its
-				// file sinker spilled, so the same one-section move
-				// retires those reservations and retains the names —
-				// the ledger never keeps a reservation whose dump has
-				// ended, and never counts a name whose spilling writer
-				// was never admitted (issue #25590 round-18 review).
-				if txn.engine != nil {
-					txn.convertDumpedReservationsLocked(files)
-				}
-				logutil.Warn(
-					"WORKSPACE-PENDING-CLEANUP-RETAKE",
-					zap.Strings("files", files),
-					zap.String("reason", "publication failed: the statement path performs no deletion (issue #25590 round-15 review)"),
-					zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
-				)
+			if failure := recover(); failure != nil {
+				candidate.err = moerr.ConvertPanicError(ctx, failure)
 			}
 		}()
-		if objectio.CNDumpInsertWriteFailedInjected() {
-			return false, moerr.NewInternalErrorNoCtx(
-				"fault injection: insert dump write failed")
+		if err := ctx.Err(); err != nil {
+			candidate.err = err
+			return
 		}
-
-		// scenario 2 for cn write s3, more info in the comment of S3Writer
-		tbl := tables[tbKey.tableKey]
-
-		tableDef := tbl.GetTableDef(ctx)
-		s3Writer = colexec.NewCNS3DataWriterForService(
-			txn.proc.GetService(), txn.proc.GetMPool(), fs, tableDef,
+		if objectio.CNDumpInsertWriteFailedInjected() {
+			candidate.err = moerr.NewInternalErrorNoCtx("fault injection: insert dump write failed")
+			return
+		}
+		relation := tables[candidate.key.tableKey]
+		candidate.table = cloneSourceTable(relation)
+		candidate.writer = colexec.NewCNS3DataWriterForService(
+			txn.proc.GetService(), txn.proc.GetMPool(), fs, relation.GetTableDef(ctx),
 			workspaceDumpWriteS3Threshold, false, txn.dumpSinkerCapacityOption(),
 		)
-
-		for _, bat = range mp[tbKey] {
-			if err = s3Writer.Write(ctx, bat); err != nil {
-				return false, err
+		for _, rows := range mp[candidate.key] {
+			if err := candidate.writer.Write(ctx, rows); err != nil {
+				candidate.err = err
+				return
 			}
 		}
-
 		if objectio.CNDumpInsertSyncFailedInjected() {
-			return false, moerr.NewInternalErrorNoCtx(
-				"fault injection: insert dump sync failed")
+			candidate.err = moerr.NewInternalErrorNoCtx("fault injection: insert dump sync failed")
+			return
 		}
-		if stats, err = s3Writer.Sync(ctx); err != nil {
-			return false, err
+		stats, err := candidate.writer.Sync(ctx)
+		if err != nil {
+			candidate.err = err
+			return
 		}
+		candidate.location = stats[0].ObjectLocation().String()
+		candidate.batch, candidate.err = candidate.writer.FillBlockInfoBat(txn.proc.Mp())
+	}
 
-		fileName = stats[0].ObjectLocation().String()
-		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.Mp()); err != nil {
-			return false, err
+	abandon := func(candidate *spill) {
+		if candidate.writer == nil {
+			return
 		}
-
-		var table *txnTable
-		if v, ok := tbl.(*txnTableDelegate); ok {
-			table = v.origin
-		} else {
-			table = tbl.(*txnTable)
+		// A writer whose file entry never landed remains the only owner of
+		// its files. Move the names and their reservations into the same
+		// deferred cleanup used at the statement boundary (issue #25590).
+		files := candidate.writer.AbandonAndRetainableNames()
+		candidate.writer.Close()
+		candidate.writer = nil
+		if len(files) == 0 {
+			return
 		}
-
-		if err = table.getTxn().writeFileLockedWithAutoIncrEpochKnown(
-			INSERT,
-			table.accountId,
-			table.db.databaseId,
-			table.tableId,
-			table.db.databaseName,
-			table.tableName,
-			fileName,
-			bat,
-			catalog.ObjectInsertAttrs,
-			table.getTxn().tnStores[0],
-			tbKey.autoIncrEpoch,
-			tbKey.autoIncrEpochKnown,
-		); err != nil {
-			return false, err
+		for _, name := range files {
+			txn.pendingObjectCleanup = append(txn.pendingObjectCleanup, pendingObjectCleanupItem{name: name})
 		}
-
-		closeErr := s3Writer.CloseWithCleanup(ctx, nil)
-		s3Writer = nil
-		return true, closeErr
+		if txn.engine != nil {
+			txn.convertDumpedReservationsLocked(files)
+		}
+		logutil.Warn("WORKSPACE-PENDING-CLEANUP-RETAKE",
+			zap.Strings("files", files),
+			zap.String("reason", "publication failed: the statement path performs no deletion (issue #25590 round-15 review)"),
+			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+		)
 	}
 
 	published := make(map[int]bool)
 	var publishErr error
-	for tbKey := range mp {
-		publishedNow, perr := publishTable(tbKey)
-		if publishedNow {
-			for _, idx := range mpIdxs[tbKey] {
+	writeGroup := func(group []spill) {
+		prepareRegion := gotrace.StartRegion(ctx, "txn spill prepare files")
+		var prepareErr error
+		if len(group) == 1 {
+			prepare(ctx, &group[0])
+			prepareErr = group[0].err
+		} else {
+			prepareCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			var firstFailure sync.Once
+			var workers sync.WaitGroup
+			for i := range group {
+				workers.Go(func() {
+					prepare(prepareCtx, &group[i])
+					if err := group[i].err; err != nil {
+						firstFailure.Do(func() {
+							// Record before cancellation can wake an earlier peer.
+							prepareErr = err
+							cancel()
+						})
+					}
+				})
+			}
+			workers.Wait()
+			// Successful writers retain a live context through publication;
+			// failed writers have all joined before their resources are reclaimed.
+		}
+		prepareRegion.End()
+		defer gotrace.StartRegion(ctx, "txn spill record files").End()
+
+		// A panic during recording must still release the writers for
+		// every file that did not reach the workspace.
+		defer func() {
+			for i := range group {
+				abandon(&group[i])
+			}
+		}()
+		if prepareErr != nil {
+			publishErr = prepareErr
+			return
+		}
+		for i := range group {
+			candidate := &group[i]
+			table, key := candidate.table, candidate.key
+			publishErr = txn.writeFileLockedWithAutoIncrEpochKnown(
+				INSERT, table.accountId, table.db.databaseId, table.tableId,
+				table.db.databaseName, table.tableName, candidate.location,
+				candidate.batch, catalog.ObjectInsertAttrs, table.getTxn().tnStores[0],
+				key.autoIncrEpoch, key.autoIncrEpochKnown,
+			)
+			if publishErr != nil {
+				return
+			}
+			for _, idx := range mpIdxs[key] {
 				published[idx] = true
 			}
-			// count rows that actually left the in-memory workspace; the
-			// rows of unpublished tables never leave it.
-			*pkCount += mpRows[tbKey]
+			*pkCount += mpRows[key]
+			publishErr = candidate.writer.CloseWithCleanup(ctx, nil)
+			candidate.writer = nil
+			if publishErr != nil {
+				return
+			}
 		}
-		if perr != nil {
-			publishErr = perr
-			break
+	}
+
+	const spillWriters = 16
+	group := make([]spill, 0, spillWriters)
+	var groupBytes uint64
+	for key := range mp {
+		// Keep large table spills serial. Across small tables, bound the
+		// input bytes simultaneously handed to writers by the existing
+		// write workspace threshold.
+		var tableBytes uint64
+		if parallel {
+			for _, idx := range mpIdxs[key] {
+				tableBytes += txn.writes[idx].accountedSize
+			}
 		}
+		if len(group) != 0 && (len(group) == spillWriters || groupBytes+tableBytes > txn.engine.config.writeWorkspaceThreshold) {
+			writeGroup(group)
+			if publishErr != nil {
+				break
+			}
+			group = group[:0]
+			groupBytes = 0
+		}
+		group = append(group, spill{key: key})
+		groupBytes += tableBytes
+		if !parallel {
+			writeGroup(group)
+			if publishErr != nil {
+				break
+			}
+			group = group[:0]
+		}
+	}
+	if publishErr == nil && len(group) != 0 {
+		writeGroup(group)
 	}
 
 	// Retire exactly the published sources, compacting in place: every
@@ -4780,7 +4820,25 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 	}
 
-	foo := func(idxes []int64) (err error) {
+	mergeBatches := func(idxes []int64) (err error) {
+		// Keep the original workspace order, with a separate chain of later
+		// candidates for each physical table. Searching unrelated writes at
+		// every statement boundary is expensive when one transaction clones
+		// many tables and each table has a small, independent batch.
+		type relationID struct{ database, table uint64 }
+		first := make(map[relationID]int, len(idxes))
+		next := make([]int, len(idxes))
+		for i := len(idxes) - 1; i >= 0; i-- {
+			entry := &txn.writes[idxes[i]]
+			key := relationID{entry.databaseId, entry.tableId}
+			later, ok := first[key]
+			if !ok {
+				later = -1
+			}
+			next[i] = later
+			first[key] = i
+		}
+
 		for i := 0; i < len(idxes); i++ {
 			a := &txn.writes[idxes[i]]
 			if a.bat == nil || a.bat.RowCount() == objectio.BlockMaxRows {
@@ -4802,10 +4860,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			// entry count would not run again to repair it.
 			rowCount := a.bat.RowCount()
 			sources := make([]int64, 0, 4)
-			for j := i + 1; j < len(idxes); j++ {
+			for j := next[i]; j >= 0; j = next[j] {
 				b := &txn.writes[idxes[j]]
-				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
-					rowCount+b.bat.RowCount() <= objectio.BlockMaxRows {
+				if b.bat != nil && rowCount+b.bat.RowCount() <= objectio.BlockMaxRows {
 					sources = append(sources, idxes[j])
 					rowCount += b.bat.RowCount()
 				}
@@ -4911,12 +4968,12 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		var arr []int64
 
 		ins := inserts.ToI64Array(&arr)
-		if err := foo(ins); err != nil {
+		if err := mergeBatches(ins); err != nil {
 			return err
 		}
 
 		del := deletes.ToI64Array(&arr)
-		if err := foo(del); err != nil {
+		if err := mergeBatches(del); err != nil {
 			return err
 		}
 
@@ -4958,7 +5015,9 @@ func (txn *Transaction) compactNilWorkspaceSlotsLocked() {
 		if txn.writes[i].bat == nil {
 			continue
 		}
-		txn.writes[n] = txn.writes[i]
+		if n != i {
+			txn.writes[n] = txn.writes[i]
+		}
 		n++
 	}
 	// Drop the vacated slots' stale Entry references through the
@@ -5568,7 +5627,7 @@ func (txn *Transaction) unprotectUnreferencedTxnLocalSharedFilesLocked(
 	statsList []objectio.ObjectStats,
 	ignoreEntry func(Entry) bool,
 ) {
-	if !txn.isCloneTxn ||
+	if !txn.isCloneTxn.Load() ||
 		txn.op == nil ||
 		txn.engine == nil ||
 		txn.engine.cloneTxnCache == nil {
@@ -5768,6 +5827,7 @@ func (txn *Transaction) getCachedTableByKey(
 }
 
 func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err error) {
+	defer gotrace.StartRegion(ctx, "txn prepare commit").End()
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Commit",
@@ -5784,11 +5844,17 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 		return nil, nil
 	}
 
-	if err := txn.IncrStatementID(ctx, true); err != nil {
+	region := gotrace.StartRegion(ctx, "txn prepare statement")
+	err = txn.IncrStatementID(ctx, true)
+	region.End()
+	if err != nil {
 		return nil, err
 	}
 
-	if err := txn.transferTombstonesByCommit(ctx); err != nil {
+	region = gotrace.StartRegion(ctx, "txn transfer tombstones")
+	err = txn.transferTombstonesByCommit(ctx)
+	region.End()
+	if err != nil {
 		return nil, err
 	}
 
@@ -5797,11 +5863,17 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 	// around metadata resolution, so it must run with the lock held — same
 	// as the IncrStatementID path.
 	txn.Lock()
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+	region = gotrace.StartRegion(ctx, "txn merge workspace")
+	err = txn.mergeTxnWorkspaceLocked(ctx)
+	region.End()
+	if err != nil {
 		txn.Unlock()
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
+	region = gotrace.StartRegion(ctx, "txn spill workspace")
+	err = txn.dumpBatchLocked(ctx, -1)
+	region.End()
+	if err != nil {
 		txn.Unlock()
 		return nil, err
 	}
@@ -5848,7 +5920,9 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 			return nil, err
 		}
 	}
+	region = gotrace.StartRegion(ctx, "txn encode commit")
 	reqs, err = genWriteReqs(ctx, txn)
+	region.End()
 	if err != nil {
 		return nil, err
 	}
@@ -6261,9 +6335,9 @@ func (txn *Transaction) delTransaction() {
 		return
 	}
 
-	if txn.isCloneTxn {
+	if txn.isCloneTxn.Load() {
 		txn.engine.cloneTxnCache.DeleteTxn(txn.op.Txn().ID)
-		txn.isCloneTxn = false
+		txn.isCloneTxn.Store(false)
 	}
 
 	for i := range txn.writes {

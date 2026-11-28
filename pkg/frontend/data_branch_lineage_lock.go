@@ -259,15 +259,20 @@ func cloneDatabaseAdmissionRequests(source cloneDatabaseSource, stmt *tree.Clone
 // Resolve through the background owner, including its own catalog writes and
 // historical/subscription routing. Never borrow the outer session's operator.
 func resolveBranchCloneSource(ctx context.Context, ses *Session, bh BackgroundExec, source branchCloneSource) (branchResolvedSource, error) {
-	back := bh.(*backExec)
 	proc, err := newCloneDatabaseTargetLockProcess(ctx, ses, bh)
 	if err != nil {
 		return branchResolvedSource{}, err
 	}
 	defer proc.Free()
 	tcc := InitTxnCompilerContext(ses.GetTxnCompileCtx().DefaultDatabase())
-	tcc.SetExecCtx(&ExecCtx{reqCtx: defines.AttachAccountId(ctx, source.account), ses: back.backSes, proc: proc})
 	defer tcc.Close()
+	exec := ExecCtx{ses: bh.(*backExec).backSes, proc: proc}
+	tcc.SetExecCtx(&exec)
+	return resolveBranchCloneDefinition(ctx, tcc, &exec, source)
+}
+
+func resolveBranchCloneDefinition(ctx context.Context, tcc *TxnCompilerContext, exec *ExecCtx, source branchCloneSource) (branchResolvedSource, error) {
+	exec.reqCtx = defines.AttachAccountId(ctx, source.account)
 	ref, def, err := tcc.Resolve(source.database, source.table, source.snapshot, nil)
 	if err != nil {
 		return branchResolvedSource{}, err
@@ -305,6 +310,12 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 	requests = slices.CompactFunc(requests, func(a, b branchCloneSource) bool {
 		return compareBranchCloneSource(a, b) == 0 && a.snapshot == b.snapshot
 	})
+	// All lookups use the background transaction. Reuse its compiler
+	// context within each catalog frontier, and discard it across the locks.
+	beforeResolver := InitTxnCompilerContext(ses.GetTxnCompileCtx().DefaultDatabase())
+	beforeExec := ExecCtx{ses: bh.(*backExec).backSes, proc: a.proc}
+	beforeResolver.SetExecCtx(&beforeExec)
+	defer beforeResolver.Close()
 	before := make([]branchResolvedSource, len(requests))
 	ids := make([]uint64, 0, len(requests))
 	var discoveryErr error
@@ -313,7 +324,7 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 		if request.table == "" {
 			continue
 		}
-		resolved, err := resolveBranchCloneSource(ctx, ses, bh, request)
+		resolved, err := resolveBranchCloneDefinition(ctx, beforeResolver, &beforeExec, request)
 		if err != nil {
 			discoveryErr = err
 			break
@@ -460,14 +471,31 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 				return err
 			}
 			// COPY ALTER is excluded by G; inplace ALTER is excluded only by T.
-			for _, source := range tables {
-				keys, err := cloneCatalogLockBatch(a.proc, source.account, source.database, source.table)
+			// Lock contiguous keys of the same mode together. Keeping the
+			// established account/database/name order also covers a table
+			// clone whose exclusive destination sorts among its sources.
+			names := make([]string, 0, len(tables))
+			for first := 0; first < len(tables); {
+				source := tables[first]
+				mode := tableModes[source]
+				names = append(names[:0], source.table)
+				next := first + 1
+				for next < len(tables) {
+					key := tables[next]
+					if key.account != source.account || key.database != source.database || tableModes[key] != mode {
+						break
+					}
+					names = append(names, key.table)
+					next++
+				}
+				keys, err := cloneTableNameLockBatch(a.proc, source.account, source.database, names)
 				if err != nil {
 					return err
 				}
-				if err = a.lockKey(catalog.MO_TABLES, defines.AttachAccountId(ctx, source.account), keys, tableModes[source], source.account); err != nil {
+				if err = a.lockKey(catalog.MO_TABLES, defines.AttachAccountId(ctx, source.account), keys, mode, source.account); err != nil {
 					return err
 				}
+				first = next
 			}
 			if err = a.finish(ctx, ses, bh); err != nil {
 				return err
@@ -490,11 +518,15 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 			return empty, err
 		}
 	}
+	afterResolver := InitTxnCompilerContext(ses.GetTxnCompileCtx().DefaultDatabase())
+	afterExec := ExecCtx{ses: bh.(*backExec).backSes, proc: a.proc}
+	afterResolver.SetExecCtx(&afterExec)
+	defer afterResolver.Close()
 	for i, request := range requests {
 		if request.table == "" {
 			continue
 		}
-		after, err := resolveBranchCloneSource(ctx, ses, bh, request)
+		after, err := resolveBranchCloneDefinition(ctx, afterResolver, &afterExec, request)
 		if err != nil {
 			return empty, err
 		}

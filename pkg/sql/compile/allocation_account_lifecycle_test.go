@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -519,6 +521,44 @@ func TestAllocationAccountTransportParticipantsDoNotActivateLifecycle(t *testing
 	require.ErrorIs(t, c.attachRuntimeAllocationOwners([]*Scope{{
 		RootOp: active,
 	}}), mpool.ErrAllocationAccountInvariant)
+}
+
+type allocationSpillRootProbe struct {
+	fileservice.FileService
+	path    string
+	sampled bool
+}
+
+func (fs *allocationSpillRootProbe) RootPath() string {
+	fs.sampled = true
+	return fs.path
+}
+
+func TestAllocationAccountDefersSpillFilesystemSampling(t *testing.T) {
+	path := t.TempDir()
+	local, err := fileservice.NewLocalFS(t.Context(), defines.LocalFileServiceName, path, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { local.Close(context.Background()) })
+	fs := &allocationSpillRootProbe{FileService: local, path: path}
+	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
+	owner := &allocationLifecycleOwnerOperator{MockOperator: colexec.NewMockOperator()}
+	c := &Compile{proc: proc, MessageBoard: message.NewMessageBoard(), scopes: []*Scope{{RootOp: owner}}}
+
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(mpool.AllocationAccountTerminalSnapshot) {}))
+	controller, err := c.allocationControllerProvider()
+	require.NoError(t, err)
+	require.NoError(t, controller.AcquireAllocationCapacity(256))
+	defer controller.ReleaseAllocationCapacity(256)
+	require.False(t, fs.sampled, "memory-only allocation must not inspect the spill filesystem")
+
+	spillBudget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	t.Cleanup(spillBudget.Close)
+	require.True(t, fs.sampled, "spill admission must inspect the spill filesystem")
+	require.Equal(t, uint64(256), spillBudget.Used(), "spill admission must retain existing memory ownership")
+	disk, err := spillBudget.ReserveSpillDisk(1)
+	require.NoError(t, err)
+	disk.Release()
 }
 
 func TestMaterializedSourceActivatesAllocationLifecycle(t *testing.T) {

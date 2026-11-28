@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -371,11 +373,16 @@ func clone(
 	dstRel engine.Relation,
 	dataObjBat *batch.Batch,
 	tombstoneObjBat *batch.Batch,
+	writeRows bool,
 ) error {
 
 	var (
 		err error
 	)
+
+	if writeRows {
+		reader.(*disttae.TableMetaReader).UseCloneRowWrites(dstCtx, dstRel)
+	}
 
 	checkObjStatsFmt := func(bat *batch.Batch, isTombstone bool) error {
 		idx := 0
@@ -389,6 +396,7 @@ func clone(
 			rowCnt int
 		)
 
+		log := logutil.GetGlobalLogger().Check(zap.DebugLevel, "TABLE-CLONE")
 		col, area := vector.MustVarlenaRawData(bat.Vecs[idx])
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
@@ -396,16 +404,21 @@ func clone(
 				return moerr.NewInternalErrorNoCtxf("object fmt wrong: %s", stats.FlagString())
 			}
 
-			objCnt++
-			blkCnt += int(stats.BlkCnt())
-			rowCnt += int(stats.Rows())
+			if log != nil {
+				objCnt++
+				blkCnt += int(stats.BlkCnt())
+				rowCnt += int(stats.Rows())
+			}
 		}
 
+		if log == nil {
+			return nil
+		}
 		dstDef := dstRel.GetTableDef(dstCtx)
 		innerReader := reader.(*disttae.TableMetaReader)
 		srcDef := innerReader.GetTableDef()
 
-		logutil.Info("TABLE-CLONE",
+		log.Write(
 			zap.Bool("isTombstone", isTombstone),
 			zap.String("src", fmt.Sprintf("%s(%d)-%s(%d)", srcDef.DbName, srcDef.DbId, srcDef.Name, srcDef.TblId)),
 			zap.String("dst", fmt.Sprintf("%s(%d)-%s(%d)", dstDef.DbName, dstDef.DbId, dstDef.Name, dstDef.TblId)),
@@ -460,11 +473,20 @@ func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
 		err error
 	)
 
+	allowRowWrites := proc.Ctx.Value(tree.CloneLevelCtxKey{}) == tree.NormalCloneLevelDatabase &&
+		!features.IsPartitioned(tc.Ctx.SrcTblDef.FeatureFlag) && tc.Ctx.SrcObjDef.PubInfo == nil
+	for _, index := range tc.Ctx.SrcTblDef.Indexes {
+		if !catalog.IsNullIndexAlgo(index.IndexAlgo) && index.IndexAlgo != catalog.MoIndexBTreeAlgo.ToString() {
+			allowRowWrites = false
+			break
+		}
+	}
+
 	for name, srcReader := range tc.srcReader {
 		if err = clone(
 			proc.Ctx, tc.Ctx.SrcCtx,
 			proc.Mp(), srcReader, tc.dstRel[name],
-			tc.dataObjBat, tc.tombstoneObjBat,
+			tc.dataObjBat, tc.tombstoneObjBat, allowRowWrites,
 		); err != nil {
 			return vm.CallResult{}, err
 		}
@@ -477,7 +499,7 @@ func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
 		if err = clone(
 			proc.Ctx, tc.Ctx.SrcCtx,
 			proc.Mp(), reader, tc.dstIdxRel[idxName],
-			tc.dataObjBat, tc.tombstoneObjBat,
+			tc.dataObjBat, tc.tombstoneObjBat, allowRowWrites,
 		); err != nil {
 			return vm.CallResult{}, err
 		}
@@ -495,9 +517,9 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	proc *process.Process,
 ) error {
 
-	if tc.Ctx.SrcAutoIncrMaxValues == nil &&
-		tc.Ctx.SrcAutoIncrOffsets == nil &&
-		len(tc.Ctx.IndexAutoIncrStates) == 0 {
+	resetMain := !tc.Ctx.MainAutoIncrementSeeded &&
+		(tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil)
+	if !resetMain && len(tc.Ctx.IndexAutoIncrStates) == 0 {
 		return nil
 	}
 	if !engine.TxnSupportsAutoIncrEpochFence(proc.GetTxnOperator()) {
@@ -507,15 +529,12 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		)
 	}
 
-	if tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil {
+	if resetMain {
 		if err := updateRelationAutoIncrement(
 			dstCtx,
 			proc,
 			tc.dstMasterRel,
-			AutoIncrementState{
-				MaxValues: tc.Ctx.SrcAutoIncrMaxValues,
-				Offsets:   tc.Ctx.SrcAutoIncrOffsets,
-			},
+			tc.Ctx.MainAutoIncrementState(),
 			tc.Ctx.RequestedAutoIncrOffset,
 			true,
 		); err != nil {
@@ -586,19 +605,8 @@ func updateRelationAutoIncrement(
 		return rel.AlterTable(ctx, nil, epochReqs)
 	}
 
-	for _, col := range incrservice.GetUserAutoColumnFromDef(def) {
-		name := strings.ToLower(col.ColName)
-		if err := setOffset(col, max(requestedOffset, state.MaxValues[name], state.Offsets[name])); err != nil {
-			return err
-		}
-	}
-	for _, col := range incrservice.GetInternalAutoColumnFromDef(def) {
-		name := strings.ToLower(col.ColName)
-		offset, ok := state.Offsets[name]
-		if !ok {
-			continue
-		}
-		if err := setOffset(col, offset); err != nil {
+	for _, col := range state.MainColumns(def, requestedOffset) {
+		if err := setOffset(col, col.Offset); err != nil {
 			return err
 		}
 	}

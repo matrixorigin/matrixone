@@ -26,10 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -507,6 +509,27 @@ func collectCloneRoutineReferences(
 	return references, cloneRoutineDependenciesInspected, nil
 }
 
+// Read all definitions at the frontier established by the inventory SQL. RC
+// clone admission makes a separate call after locking to check for changes.
+func getCloneDatabaseTableInfos(
+	ctx context.Context,
+	service string,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+	database string,
+) ([]*tableInfo, error) {
+	tables, err := showFullTables(ctx, service, bh, snapshot, database, "")
+	if err != nil {
+		return nil, err
+	}
+	if back, ok := bh.(*backExec); ok {
+		reader := back.backSes.GetShareTxnBackgroundExec(ctx, false)
+		defer reader.Close()
+		return getCreateSQLsForTableInfos(plan2.WithCloneSchemaDiscovery(ctx), service, reader, snapshot, tables)
+	}
+	return getCreateSQLsForTableInfos(ctx, service, bh, snapshot, tables)
+}
+
 func collectCloneDatabaseSource(
 	ctx context.Context,
 	ses *Session,
@@ -579,7 +602,7 @@ func collectCloneDatabaseSource(
 		return source, err
 	}
 
-	srcTblInfos, err := getTableInfos(ctx, ses.GetService(), bh, snapshot, srcDBName, "")
+	srcTblInfos, err := getCloneDatabaseTableInfos(ctx, ses.GetService(), bh, snapshot, srcDBName)
 	if err != nil {
 		return source, err
 	}
@@ -591,7 +614,10 @@ func collectCloneDatabaseSource(
 	if err != nil {
 		return source, err
 	}
-	schemaFkDeps, err := getFkDepsFromTableInfos(ctx, srcTblInfos)
+	schemaFkDeps, err := readTableDefinitionFKDeps(ctx, srcTblInfos, func(info *tableInfo, create *tree.CreateTable) {
+		info.batchCloneIndexCatalog = compile.CloneIndexCatalogCanBatch(create)
+		info.parallelClone = info.batchCloneIndexCatalog && create.PartitionOption == nil
+	})
 	if err != nil {
 		return source, err
 	}

@@ -348,7 +348,7 @@ func beginLifecycleRCAdmission(ctx context.Context, ses *Session, bh BackgroundE
 	return a, nil
 }
 
-func (a *lifecycleRCAdmission) lockKey(relationName string, ctx context.Context, keys *batch.Batch, mode lock.LockMode, group uint32) error {
+func (a *lifecycleRCAdmission) lockKey(relationName string, ctx context.Context, keys *batch.Batch, mode lock.LockMode, group uint32, waitPolicy ...lock.WaitPolicy) error {
 	defer keys.Vecs[0].Free(a.proc.Mp())
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	relationCtx := systemCtx
@@ -369,7 +369,7 @@ func (a *lifecycleRCAdmission) lockKey(relationName string, ctx context.Context,
 	fireLifecycleAdmissionLockEvent(relationName, group, mode, false)
 	err = withCloneLockContext(a.proc, ctx, func() error {
 		_, lockErr := lockop.LockRowsForAdmissionWithContext(ctx, eng, a.proc,
-			relation.GetTableID(relationCtx), keys, 0, *keys.Vecs[0].GetType(), mode, group)
+			relation.GetTableID(relationCtx), keys, 0, *keys.Vecs[0].GetType(), mode, group, waitPolicy...)
 		return lockErr
 	})
 	if err == nil {

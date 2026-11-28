@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -230,7 +231,7 @@ func TestBuildInsertIndexMetaBatchUsesExistingMoIndexesLayout(t *testing.T) {
 		},
 	}
 
-	bat, err := buildInsertIndexMetaBatch(272464, 123456, ct, mockEngine, proc)
+	bat, err := BuildInsertIndexMetaBatch(272464, 123456, ct, nil, mockEngine, proc, nil)
 	require.NoError(t, err)
 	defer bat.Clean(proc.Mp())
 
@@ -257,6 +258,88 @@ func TestBuildInsertIndexMetaBatchUsesExistingMoIndexesLayout(t *testing.T) {
 	require.Equal(t, [][]byte{[]byte(`{"included_columns":"title,category","lists":"2","op_type":"vector_l2_ops"}`)}, vector.InefficientMustBytesCol(bat.Vecs[7]))
 	require.Equal(t, []int8{1}, vector.MustFixedColWithTypeCheck[int8](bat.Vecs[8]))
 	require.NotNil(t, bat.Vecs[15])
+}
+
+func TestIndexMetadataSkipsHiddenPrimaryKeyAllocation(t *testing.T) {
+	for _, tc := range []struct {
+		name, primary, indexName string
+		unavailable, wantErr     bool
+		secondary                bool
+	}{
+		{name: "hidden primary with unavailable allocator", primary: catalog.FakePrimaryKeyColName, unavailable: true},
+		{name: "real primary reports allocator error", primary: "v", unavailable: true, wantErr: true},
+		{name: "real primary retains catalog row", primary: "v", indexName: "PRIMARY"},
+		{name: "hidden primary retains secondary index", primary: catalog.FakePrimaryKeyColName, secondary: true, indexName: "idx_v"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			ctrl := gomock.NewController(t)
+			eg := mock_frontend.NewMockEngine(ctrl)
+			allocationErr := errors.New("index allocator unavailable")
+			eg.EXPECT().AllocateIDByKey(gomock.Any(), ALLOCID_INDEX_KEY).DoAndReturn(func(context.Context, string) (uint64, error) {
+				if tc.unavailable {
+					return 0, allocationErr
+				}
+				return uint64(321), nil
+			}).AnyTimes()
+			ct := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: tc.primary, Names: []string{tc.primary}},
+			}}}
+			if tc.secondary {
+				ct.Cts = append(ct.Cts, &engine.IndexDef{Indexes: []*plan.IndexDef{{IndexName: "idx_v", Parts: []string{"v"}}}})
+			}
+			baseline := proc.Mp().CurrNB()
+			bat, err := BuildInsertIndexMetaBatch(17, 23, ct, nil, eg, proc, nil)
+			if tc.wantErr {
+				require.ErrorIs(t, err, allocationErr)
+				require.Nil(t, bat)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+				return
+			}
+			require.NoError(t, err)
+			defer bat.Clean(proc.Mp())
+			if tc.indexName == "" {
+				require.Empty(t, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0]))
+				require.Zero(t, bat.RowCount())
+				return
+			}
+			require.Equal(t, []uint64{321}, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0]))
+			require.Equal(t, [][]byte{[]byte(tc.indexName)}, vector.InefficientMustBytesCol(bat.Vecs[3]))
+			require.Equal(t, [][]byte{[]byte("v")}, vector.InefficientMustBytesCol(bat.Vecs[11]))
+		})
+	}
+}
+
+func TestIndexMetadataReuseReplacesRowsAndReleasesOnFailure(t *testing.T) {
+	proc := testutil.NewProc(t)
+	baseline := proc.Mp().CurrNB()
+	ctrl := gomock.NewController(t)
+	eg := mock_frontend.NewMockEngine(ctrl)
+	fail := false
+	eg.EXPECT().AllocateIDByKey(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, string) (uint64, error) {
+		if fail {
+			return 0, errors.New("index ID allocation failed")
+		}
+		return uint64(123), nil
+	}).AnyTimes()
+	definition := func(name string, parts ...string) *engine.ConstraintDef {
+		return &engine.ConstraintDef{Cts: []engine.Constraint{&engine.IndexDef{Indexes: []*plan.IndexDef{
+			{IndexName: name, Parts: parts, TableExist: true, IndexTableName: "hidden_" + name},
+		}}}}
+	}
+	buf, err := BuildInsertIndexMetaBatch(1, 10, definition("old", "a", "b"), nil, eg, proc, nil)
+	require.NoError(t, err)
+	buf, err = BuildInsertIndexMetaBatch(2, 20, definition("new", "c"), nil, eg, proc, buf)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{2}, vector.MustFixedColWithTypeCheck[uint64](buf.Vecs[1]))
+	require.Equal(t, []uint64{20}, vector.MustFixedColWithTypeCheck[uint64](buf.Vecs[2]))
+	require.Equal(t, [][]byte{[]byte("new")}, vector.InefficientMustBytesCol(buf.Vecs[3]))
+	require.Equal(t, [][]byte{[]byte("c")}, vector.InefficientMustBytesCol(buf.Vecs[11]))
+	fail = true
+	buf, err = BuildInsertIndexMetaBatch(3, 20, definition("failed", "d"), nil, eg, proc, buf)
+	require.ErrorContains(t, err, "index ID allocation failed")
+	require.Nil(t, buf)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
 }
 
 // Define an anonymous function to construct the table structure

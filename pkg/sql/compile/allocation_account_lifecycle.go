@@ -354,7 +354,7 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 	if c.proc == nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	budget, err := c.proc.GetExecutionResourceBudget()
+	budget, err := c.proc.GetExecutionAllocationBudget()
 	if err != nil {
 		return err
 	}
@@ -362,7 +362,7 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 	if err != nil {
 		return err
 	}
-	limit := budget.Snapshot().Cap
+	limit := budget.Cap()
 	if limit == 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}

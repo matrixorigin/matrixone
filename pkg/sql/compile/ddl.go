@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	gotrace "runtime/trace"
 	"slices"
 	"sort"
 	"strconv"
@@ -57,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -1908,13 +1910,13 @@ func persistedIPFunctionAlterTarget(qry *plan.AlterTable) *plan.TableDef {
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
-	return s.createTable(c, nil)
+	return s.createTable(c, nil, nil)
 }
 
 // createTable invokes tableCreated immediately after it creates the main table.
 // This lets callers that have follow-up work distinguish IF NOT EXISTS's no-op
 // success from a physical table creation without repeating the existence check.
-func (s *Scope) createTable(c *Compile, tableCreated func()) error {
+func (s *Scope) createTable(c *Compile, tableCreated func(), clone *table_clone.TableCloneCtx) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -2136,6 +2138,24 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			}
 			def.TblId = id
 			extra.IndexTables = append(extra.IndexTables, id)
+		}
+	}
+
+	var cloneOffsets []incrservice.AutoColumn
+	if c.keepAutoIncrement == 0 && clone != nil &&
+		(clone.SrcAutoIncrMaxValues != nil || clone.SrcAutoIncrOffsets != nil) {
+		if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
+			return moerr.NewNotSupported(c.proc.Ctx, "AUTO_INCREMENT allocator reset requires epoch fencing on every TN service")
+		}
+		cloneOffsets = clone.MainAutoIncrementState().MainColumns(qry.TableDef, clone.RequestedAutoIncrOffset)
+		for _, col := range cloneOffsets {
+			typ := plan2.ExprType2Type(&qry.TableDef.Cols[col.ColIndex].Typ)
+			if err := incrservice.ValidateAutoColumnOffset(c.proc.Ctx, typ, col.Offset); err != nil {
+				return err
+			}
+			if !qry.TableDef.Cols[col.ColIndex].Hidden {
+				extra.AutoIncrOffset = col.Offset
+			}
 		}
 	}
 
@@ -2510,18 +2530,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return err
 		}
 
-		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return err
+		staged := false
+		if clone != nil {
+			staged, err = c.stageCloneIndexCatalogInsert(qry, dbSource, newRelation)
 		}
-		err = c.runSqlWithOptions(
-			insertSQL, executor.StatementOption{}.WithDisableLog(),
-		)
+		var insertSQL string
+		if err == nil && !staged {
+			insertSQL, err = makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
+			if err == nil {
+				err = c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithDisableLog())
+			}
+		}
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("insertSQL", insertSQL),
@@ -2558,7 +2577,10 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 
 	}
 
-	if c.keepAutoIncrement == 0 {
+	if len(cloneOffsets) != 0 {
+		err = createAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, qry.GetTableDef(), c.proc.GetTxnOperator(), nil, cloneOffsets)
+		clone.MainAutoIncrementSeeded = err == nil
+	} else if c.keepAutoIncrement == 0 {
 		err = maybeCreateAutoIncrement(
 			c.proc.Ctx,
 			c.proc.GetService(),
@@ -5458,9 +5480,20 @@ func (s *Scope) TableClone(c *Compile) error {
 		created bool
 	)
 
+	if b, ok := c.proc.Ctx.Value(cloneIndexCatalogBatchKey{}).(*CloneIndexCatalogBatch); ok {
+		if b.staged != nil {
+			b.staged.CleanOnlyData()
+		}
+	}
+
 	clonePlan := s.Plan.GetDdl().GetCloneTable()
 
 	if clonePlan.CreateTable != nil {
+		var clone *table_clone.TableCloneCtx
+		if !clonePlan.CreateTable.GetDdl().GetCreateTable().GetTemporary() {
+			clone = s.RootOp.(*table_clone.TableClone).Ctx
+			clone.MainAutoIncrementSeeded = false
+		}
 		s.Plan = clonePlan.CreateTable
 		originalCtx := c.proc.Ctx
 		marked := c.proc.GetSessionInfo() != nil && c.proc.GetSessionInfo().IsRestore
@@ -5469,7 +5502,8 @@ func (s *Scope) TableClone(c *Compile) error {
 		}
 		err = func() error {
 			defer func() { c.proc.Ctx = originalCtx }()
-			return s.createTable(c, func() { created = true })
+			defer gotrace.StartRegion(c.proc.Ctx, "clone create table").End()
+			return s.createTable(c, func() { created = true }, clone)
 		}()
 		if err != nil {
 			return err
@@ -5479,6 +5513,7 @@ func (s *Scope) TableClone(c *Compile) error {
 		}
 	}
 
+	defer gotrace.StartRegion(c.proc.Ctx, "clone restore data").End()
 	return s.RestoreTable(c, clonePlan)
 }
 
@@ -5532,7 +5567,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		tableDef = dstRelation.GetTableDef(c.proc.Ctx)
 		tblName = physicalName
 	}
-	logutil.Infof("[RestoreTable] BEGIN %s.%s", dbName, tblName)
+	logutil.Debugf("[RestoreTable] BEGIN %s.%s", dbName, tblName)
 
 	// 1. drop the CDC tasks CreateTable registered, before cloning data.
 	if err := DropAllIndexCdcTasks(c, tableDef, dbName, tblName); err != nil {
@@ -5557,7 +5592,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 	}
 
 	// 3. clone main table + index hidden tables (append onto empty).
-	logutil.Infof("[RestoreTable] clone (s.Run): %s.%s", dbName, tblName)
+	logutil.Debugf("[RestoreTable] clone (s.Run): %s.%s", dbName, tblName)
 	if err := s.Run(c); err != nil {
 		return err
 	}
@@ -5614,7 +5649,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 			return err
 		}
 	}
-	logutil.Infof("[RestoreTable] DONE %s.%s", dbName, tblName)
+	logutil.Debugf("[RestoreTable] DONE %s.%s", dbName, tblName)
 	return nil
 }
 
@@ -6499,6 +6534,18 @@ var maybeCreateAutoIncrement = func(
 	def *plan.TableDef,
 	txnOp client.TxnOperator,
 	nameResolver func() string) error {
+	return createAutoIncrement(ctx, sid, db, def, txnOp, nameResolver, nil)
+}
+
+func createAutoIncrement(
+	ctx context.Context,
+	sid string,
+	db engine.Database,
+	def *plan.TableDef,
+	txnOp client.TxnOperator,
+	nameResolver func() string,
+	offsets []incrservice.AutoColumn,
+) error {
 	name := def.Name
 	if nameResolver != nil {
 		name = nameResolver()
@@ -6512,6 +6559,17 @@ var maybeCreateAutoIncrement = func(
 	cols := incrservice.GetAutoColumnFromDef(def)
 	if len(cols) == 0 {
 		return nil
+	}
+
+	// A newly cloned table starts at its final offsets in the creating
+	// transaction. The default offsets for other columns stay intact.
+	for _, initial := range offsets {
+		for i := range cols {
+			if cols[i].ColIndex == initial.ColIndex {
+				cols[i].Offset = initial.Offset
+				break
+			}
+		}
 	}
 
 	return incrservice.GetAutoIncrementService(sid).Create(

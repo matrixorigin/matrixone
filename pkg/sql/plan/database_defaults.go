@@ -225,6 +225,28 @@ func GetDatabaseDefaults(ctx CompilerContext, name string, snapshot *Snapshot) (
 	if snapshot != nil && snapshot.Tenant != nil {
 		accountID = snapshot.Tenant.TenantID
 	}
+	cache, _ := ctx.GetContext().Value(cloneCatalogReadKey{}).(*cloneCatalogReadCache)
+	if cache == nil || !cache.discovery {
+		return readDatabaseDefaults(ctx, accountID, id, snapshot)
+	}
+	// SHOW CREATE runs in a read-only inventory pass. Include the actual
+	// read frontier even though the pass normally borrows one statement.
+	ts := ctx.GetProcess().GetTxnOperator().SnapshotTS()
+	if IsSnapshotValid(snapshot) {
+		ts = *snapshot.TS
+	}
+	key := cloneCatalogReadScope{account: accountID, database: id, physical: ts.PhysicalTime, logical: ts.LogicalTime}
+	if value, ok := cache.defaults[key]; ok {
+		return &value, nil
+	}
+	defaults, err := readDatabaseDefaults(ctx, accountID, id, snapshot)
+	if err == nil && defaults != nil {
+		cache.defaults[key] = *defaults
+	}
+	return defaults, err
+}
+
+func readDatabaseDefaults(ctx CompilerContext, accountID uint32, id uint64, snapshot *Snapshot) (*plan.DatabaseDefaults, error) {
 	available, err := databaseDefaultsAvailableAtSnapshot(ctx, snapshot)
 	if err != nil {
 		return nil, err

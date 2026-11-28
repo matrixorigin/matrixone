@@ -3713,7 +3713,16 @@ func constructTableClone(
 	}
 	defer func() { c.proc.Ctx = originalCtx }()
 
-	if mainHasAutoIncr {
+	// A fresh visible column never consumes the source reservation watermark.
+	// Only existing allocators and mapped hidden columns need a catalog read.
+	readSourceOffsets := false
+	for colIdx := range dstAutoIncrNames {
+		if sameColumnIDSpace || clonePlan.SrcTableDef.Cols[colIdx].Hidden {
+			readSourceOffsets = true
+			break
+		}
+	}
+	if readSourceOffsets {
 		if err := c.proc.Ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -3756,9 +3765,12 @@ func constructTableClone(
 			})
 		}()
 
+	}
+	if mainHasAutoIncr {
 		colMaxValue = make(map[string]uint64)
 		for colIdx, colDef := range clonePlan.SrcTableDef.Cols {
-			if !colDef.Typ.AutoIncr || colDef.Hidden {
+			dstName, mapped := dstAutoIncrNames[int32(colIdx)]
+			if !mapped || colDef.Hidden {
 				continue
 			}
 			if err := c.proc.Ctx.Err(); err != nil {
@@ -3790,9 +3802,7 @@ func constructTableClone(
 				defer ret.Close()
 				ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					if rows > 0 && len(cols) > 0 && !cols[0].IsNull(0) {
-						if dstName, ok := dstAutoIncrNames[int32(colIdx)]; ok {
-							colMaxValue[dstName] = executor.GetFixedRows[uint64](cols[0])[0]
-						}
+						colMaxValue[dstName] = executor.GetFixedRows[uint64](cols[0])[0]
 					}
 					return false
 				})

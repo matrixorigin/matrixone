@@ -210,7 +210,7 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 			return err
 		}
 		scope := &Scope{Plan: schemaPlan}
-		return scope.createTable(c, func() { created = true })
+		return scope.createTable(c, func() { created = true }, nil)
 	}, opts)
 	if err != nil {
 		return err
