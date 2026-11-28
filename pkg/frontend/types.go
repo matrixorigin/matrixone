@@ -359,9 +359,10 @@ type PrepareStmt struct {
 	rewritePolicyInvalidated atomic.Bool
 	// rewritePolicyGeneration identifies the session policy snapshot used to
 	// build this handle. It is checked while the handle is published.
-	rewritePolicyGeneration uint64
-	rewritePolicyCaptured   bool
-	rewritePolicyEnabled    bool
+	rewritePolicyGeneration   uint64
+	rewritePolicyCaptured     bool
+	rewritePolicyEnabled      bool
+	rewritePolicyHasRoleRules bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
 	compileNeedsRebuild bool

@@ -142,6 +142,9 @@ type ExplainOptions struct {
 	Format    ExplainFormat
 	NodeType  plan.Node_NodeType
 	CheckExpr []string
+	// ResultRowsOnly limits SQL EXPLAIN ANALYZE to the plan outline and final
+	// SELECT cardinality when role rules protect the input.
+	ResultRowsOnly bool
 	// CompleteLiteralVectors keeps SQL JSON literals and their function arguments
 	// complete, including serialized scalars/vectors. Text EXPLAIN retains its
 	// existing redaction and bounded vector rendering.

@@ -779,6 +779,55 @@ func TestAddRewriteHints_ShowMetadata(t *testing.T) {
 	}
 }
 
+func TestAddRewriteHints_AttachesToExplainedQuery(t *testing.T) {
+	tests := []struct {
+		sql    string
+		source func(tree.Statement) *tree.Select
+	}{
+		{
+			sql: "explain select 1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.ExplainStmt).Statement.(*tree.Select)
+			},
+		},
+		{
+			sql: "explain analyze select 1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.ExplainAnalyze).Statement.(*tree.Select)
+			},
+		},
+		{
+			sql: "explain phyplan select 1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.ExplainPhyPlan).Statement.(*tree.Select)
+			},
+		},
+		{
+			sql: "prepare p from explain analyze insert into db1.dst select 1",
+			source: func(stmt tree.Statement) *tree.Select {
+				explain := stmt.(*tree.PrepareStmt).Stmt.(*tree.ExplainAnalyze)
+				return explain.Statement.(*tree.Insert).Rows
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmts, err := parseAndApply(t, `/*+ {"rewrites": {"db1.t1": "select 7"}} */ `+test.sql)
+			for _, stmt := range stmts {
+				t.Cleanup(stmt.Free)
+			}
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			source := test.source(stmts[0])
+			require.NotNil(t, source)
+			require.NotNil(t, source.RewriteOption)
+			chain := source.RewriteOption.Rewrites["db1.t1"]
+			require.Len(t, chain, 1)
+			require.IsType(t, &tree.Select{}, chain[0].Stmt)
+		})
+	}
+}
+
 func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
 	sql := `/*+ {"rewrites": {"db1.t1": "select * from db1.t1 where tenant_id = 1"}} */ create table db1.copy as select * from db1.t1`
 	stmts, err := parseAndApply(t, sql)

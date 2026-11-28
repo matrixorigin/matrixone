@@ -3314,6 +3314,7 @@ func createPrepareStmtInSession(
 		prepareStmt.rewritePolicyGeneration = execCtx.input.rewritePolicy.generation
 		prepareStmt.rewritePolicyCaptured = true
 		prepareStmt.rewritePolicyEnabled = execCtx.input.rewritePolicy.enabled
+		prepareStmt.rewritePolicyHasRoleRules = len(execCtx.input.rewritePolicy.roleRules) > 0
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
@@ -6455,7 +6456,23 @@ func executeStmt(ses *Session,
 			if analyzeModule != nil {
 				phyPlan = analyzeModule.GetPhyPlan()
 				partialQuery = analyzeModule.GetPartialExecutionQuery()
-				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
+				physical := analyzeModule.GetExplainPhyBuffer()
+				if stmt, ok := execCtx.stmt.(*tree.ExplainPhyPlan); ok && execCtx.hasExplainRoleRules() && err == nil {
+					physical = &bytes.Buffer{}
+					if phyPlan != nil {
+						fmt.Fprintln(physical, models.ExplainPhyPlan(phyPlan, nil, models.NormalOption))
+					}
+					// The existing PHYPLAN reader expects a final nonempty
+					// line without a trailing newline.
+					physical.WriteString("Execution details hidden by role policy")
+					if opts, optionErr := getExplainOption(execCtx.reqCtx, stmt.Options); optionErr == nil && opts.Analyze {
+						if result := explain.ResultRowsLine(c.GetPlan().GetQuery()); result != "" {
+							physical.WriteByte('\n')
+							physical.WriteString(result)
+						}
+					}
+				}
+				execCtx.cw.SetExplainBuffer(physical)
 			}
 
 			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {

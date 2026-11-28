@@ -323,6 +323,8 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remappable = remapDbInStmt(s.Statement, remap)
 	case *tree.ExplainAnalyze:
 		remappable = remapDbInStmt(s.Statement, remap)
+	case *tree.ExplainPhyPlan:
+		remappable = remapDbInStmt(s.Statement, remap)
 	case *tree.LockTableStmt:
 		for i := range s.TableLocks {
 			remapTableName(&s.TableLocks[i].Table, remap)

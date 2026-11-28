@@ -159,12 +159,43 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 		buffer.Lines = []string{string(data)}
 		return nil
 	}
+	if options.Analyze && options.ResultRowsOnly {
+		outline := *options
+		outline.Analyze = false
+		outline.Verbose = false
+		// Avoid reporting background-query outcomes or per-operator estimates
+		// and counts. Those operators may run before the role-rule filter.
+		if err := explainSinglePlan(e.QueryPlan, ctx, buffer, &outline); err != nil {
+			return err
+		}
+		buffer.PushNewLine("Execution details hidden by role policy", false, 0)
+		if result := ResultRowsLine(e.QueryPlan); result != "" {
+			buffer.PushNewLine(result, false, 0)
+		}
+		return checkPlan(ctx, buffer.Lines, options.CheckExpr)
+	}
 	err := explainPlanTree(e.QueryPlan, ctx, buffer, options)
 	if err != nil {
 		return err
 	}
 
 	return checkPlan(ctx, buffer.Lines, options.CheckExpr)
+}
+
+// ResultRowsLine reports the final SELECT output. Earlier steps can contain
+// intermediates that have yet to pass through a role rule.
+func ResultRowsLine(qry *plan.Query) string {
+	if qry == nil || qry.StmtType != plan.Query_SELECT || len(qry.Steps) == 0 {
+		return ""
+	}
+	root := qry.Steps[len(qry.Steps)-1]
+	if root < 0 || int(root) >= len(qry.Nodes) {
+		return ""
+	}
+	if stats := qry.Nodes[root].GetAnalyzeInfo(); stats != nil {
+		return fmt.Sprintf("Result: outputRows=%d", stats.OutputRows)
+	}
+	return ""
 }
 
 func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {

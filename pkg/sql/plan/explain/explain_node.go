@@ -342,7 +342,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 					buf.WriteString(spec.DistanceFunction)
 					buf.WriteString("]")
 				}
-				if work := spec.ScanWork; work != nil {
+				if work := spec.ScanWork; work != nil && !options.ResultRowsOnly {
 					fmt.Fprintf(buf, " [Estimated Scan Rows: %.0f, Blocks: %d, Vector Bytes/Row: %.0f, Objects: %d, Planned DOP: %d]",
 						work.Rows, work.Blocks, work.VectorBytesPerRow, work.Objects, ndesc.Node.Stats.GetDop())
 				}
