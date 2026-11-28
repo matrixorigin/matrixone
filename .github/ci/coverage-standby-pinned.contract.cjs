@@ -12,8 +12,9 @@ test('pinned failed-group retry and completed-attempt cleanup isolate same-name 
   const pin = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   assert.match(pin, /^[a-f0-9]{40}$/);
   const workflow = file => readFileSync(join(__dirname, '../workflows', file), 'utf8');
+  assert.ok(workflow('entrypoint.yaml').includes('uses: ./.github/workflows/coverage-rollout.yaml'));
   for (const [file, reusable] of [
-    ['entrypoint.yaml', 'coverage-ut-standby.yaml'],
+    ['coverage-rollout.yaml', 'coverage-ut-standby.yaml'],
     ['coverage-standby-worker.yaml', 'coverage-worker-cs.yaml'],
     ['coverage-standby-worker.yaml', 'coverage-worker-idc.yaml'],
   ]) {

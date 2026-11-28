@@ -11,6 +11,7 @@ on:
       - '.github/ci/coverage-standby-pinned.contract.cjs'
       - '.github/ci/coverage-standby-pinned-fixture.py'
       - '.github/workflows/entrypoint.yaml'
+      - '.github/workflows/coverage-rollout.yaml'
 permissions: {}
 jobs:
   fixture:

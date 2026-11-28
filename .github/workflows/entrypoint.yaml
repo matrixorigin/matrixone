@@ -28,6 +28,7 @@ jobs:
       compose_group: ${{ steps.plan.outputs.compose_group }}
       launch_group: ${{ steps.plan.outputs.launch_group }}
       generation: ${{ steps.plan.outputs.generation }}
+      native_coverage: ${{ steps.plan.outputs.native_coverage }}
     steps:
       - name: Record CI provenance
         env:
@@ -70,10 +71,19 @@ jobs:
             core.setOutput('sdk_required', String(plan.sdk_required));
             await core.summary.addHeading('CI change scope').addRaw(`Selected: ${plan.scope}; SDK required: ${plan.sdk_required}`).write();
       - id: plan
-        name: Assign both BVT groups
+        name: Plan BVT groups and Coverage rollout
         if: ${{ steps.check_pr_valid.outputs.pull_valid == 'true' && contains(fromJSON('["full","bvt"]'), steps.scope.outputs.scope) && github.base_ref != '3.0-dev' }}
+        env:
+          COVERAGE_ROLLOUT: ${{ vars.MO_COVERAGE_NATIVE }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          native_coverage=false
+          if [[ ( "$BASE_REF" == main || "$BASE_REF" == 4.2-dev ) &&
+                "$PR_NUMBER" =~ ^[1-9][0-9]*$ && "$COVERAGE_ROLLOUT" == "$PR_NUMBER" ]]; then
+            native_coverage=true
+          fi
           compose_group=$(( (${{ github.run_id }} + ${{ github.run_attempt }}) % 2 ))
           launch_group=$((1 - compose_group))
           generation='${{ github.run_id }}-${{ github.run_attempt }}'
@@ -81,12 +91,14 @@ jobs:
             echo "compose_group=${compose_group}"
             echo "launch_group=${launch_group}"
             echo "generation=${generation}"
+            echo "native_coverage=${native_coverage}"
           } >> "$GITHUB_OUTPUT"
           {
             echo '### BVT group plan'
             echo "- Compose + Proxy: group ${compose_group}"
             echo "- Launch + Pessimistic: group ${launch_group}"
             echo "- Generation: ${generation}"
+            echo "- Native Coverage canary requested: ${native_coverage}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   docs-check:
@@ -140,11 +152,11 @@ jobs:
     permissions:
       contents: read
       actions: write
-    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@f64bda11be08c41efc47705acaa41dfe2795d5f5
+      pull-requests: read
+    uses: ./.github/workflows/coverage-rollout.yaml
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
-      enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
-      enable_cs_site_retry: ${{ github.base_ref == 'main' && github.event.pull_request.number == 32922 }}
+      native: ${{ needs.preflight.outputs.native_coverage == 'true' }}
     secrets: inherit
 
   matrixone-upgrade-ci:
