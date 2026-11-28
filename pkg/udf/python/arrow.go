@@ -160,6 +160,11 @@ func (d TypeDescriptor) Fingerprint() (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+func usesSQLZeroStruct(oid types.T) bool {
+	// typeswitch:partial DATE, DATETIME and TIMESTAMP carry zero sentinels. TIME uses Duration and YEAR is unsupported.
+	return oid == types.T_date || oid == types.T_datetime || oid == types.T_timestamp
+}
+
 // Validate checks the semantic fields that Arrow's physical type does not
 // carry.  Keeping this at the descriptor boundary makes manually constructed
 // catalog or wire descriptors obey the same contract as descriptors produced
@@ -186,10 +191,11 @@ func (d TypeDescriptor) Validate() error {
 	if oid == types.T_json && d.JSONEncoding != "canonical_text" {
 		return udferr.Newf("TYPE_CONTRACT: JSON descriptor must use canonical_text encoding")
 	}
-	if d.TemporalEncoding != "" && (oid != types.T_date && oid != types.T_datetime && oid != types.T_timestamp || d.TemporalEncoding != "sql_zero_struct") {
+	usesZeroStruct := usesSQLZeroStruct(oid)
+	if d.TemporalEncoding != "" && (!usesZeroStruct || d.TemporalEncoding != "sql_zero_struct") {
 		return udferr.Newf("TYPE_CONTRACT: unsupported temporal encoding")
 	}
-	if (oid == types.T_date || oid == types.T_datetime || oid == types.T_timestamp) && d.TemporalEncoding != "sql_zero_struct" {
+	if usesZeroStruct && d.TemporalEncoding != "sql_zero_struct" {
 		return udferr.Newf("TYPE_CONTRACT: temporal descriptor must use sql_zero_struct encoding")
 	}
 
@@ -890,7 +896,7 @@ func appendInputValue(
 	if !null && isVarlenaInputType(typ.Oid) && varlenaParameter == nil {
 		return udferr.Newf("missing cached varlena input parameter")
 	}
-	if typ.Oid == types.T_date || typ.Oid == types.T_datetime || typ.Oid == types.T_timestamp {
+	if usesSQLZeroStruct(typ.Oid) {
 		return appendTemporalInput(builder.(*array.StructBuilder), v, typ, index, null)
 	}
 	if typ.Oid == types.T_time {
@@ -1082,6 +1088,7 @@ func canonicalJSONTextBytes(value []byte) ([]byte, error) {
 func appendTemporalInput(builder *array.StructBuilder, v *vector.Vector, typ types.Type, index int, null bool) error {
 	zero := false
 	var raw int64
+	// typeswitch:partial this encoder accepts only sql_zero_struct. TIME uses Duration and YEAR is unsupported.
 	switch typ.Oid {
 	case types.T_date:
 		if !null {
@@ -1572,6 +1579,7 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 				return udferr.Newf("TYPE_CONTRACT: temporal row %d has a null child", row)
 			}
 			zero := zeroField.(*array.Boolean).Value(row)
+			// typeswitch:partial only sql_zero_struct reaches this branch. TIME is checked in the outer switch and YEAR is unsupported.
 			switch types.T(descriptor.TypeID) {
 			case types.T_date:
 				value := valueField.(*array.Date32).Value(row)
@@ -1681,12 +1689,15 @@ func appendTemporalResult(input *array.Struct, typ types.T, index int, result ve
 	return vector.MustFunctionResult[types.Timestamp](result).Append(value, false)
 }
 func appendTemporalNull(typ types.T, result vector.FunctionResultWrapper) error {
+	// typeswitch:partial this helper appends sql_zero_struct results. TIME has a separate Duration result and YEAR is unsupported.
 	switch typ {
 	case types.T_date:
 		return vector.MustFunctionResult[types.Date](result).Append(0, true)
 	case types.T_datetime:
 		return vector.MustFunctionResult[types.Datetime](result).Append(0, true)
-	default:
+	case types.T_timestamp:
 		return vector.MustFunctionResult[types.Timestamp](result).Append(0, true)
+	default:
+		return udferr.Newf("unsupported temporal type %s", typ.String())
 	}
 }

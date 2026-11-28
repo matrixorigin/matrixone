@@ -553,6 +553,7 @@ func pythonCatalogTypeNameMatches(name string, oid types.T) bool {
 // intentionally represents both supported decimal physical widths as
 // "decimal".
 func PythonCatalogTypeName(typ types.Type) string {
+	// typeswitch:partial the Python ABI supports only DECIMAL64 and DECIMAL128. DECIMAL256 has no Python descriptor.
 	if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
 		return "decimal"
 	}

@@ -671,8 +671,11 @@ func TestTypeDescriptorRejectsNonCanonicalDomain(t *testing.T) {
 		{TypeID: int32(types.T_int64), OffsetWidth: 64},
 		{TypeID: int32(types.T_int64)},
 		{TypeID: int32(types.T_decimal64), Width: 3, Scale: 4, OffsetWidth: 32},
+		{TypeID: int32(types.T_decimal256), Width: 39, OffsetWidth: 32},
 		{TypeID: int32(types.T_json), OffsetWidth: 32},
 		{TypeID: int32(types.T_date), OffsetWidth: 32},
+		{TypeID: int32(types.T_time), Scale: 6, OffsetWidth: 32, TemporalEncoding: "sql_zero_struct"},
+		{TypeID: int32(types.T_year), OffsetWidth: 32},
 		{TypeID: int32(types.T_array_float32), Width: types.MaxArrayDimension + 1},
 		{TypeID: int32(types.T_varchar), Width: 16, Charset: types.CharsetBinary, OffsetWidth: 32},
 	}

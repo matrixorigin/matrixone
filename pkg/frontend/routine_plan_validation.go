@@ -489,6 +489,7 @@ func routineRevisionReturnTypeMatches(rettype string, oid types.T) bool {
 	if strings.EqualFold(rettype, oid.String()) {
 		return true
 	}
+	// typeswitch:partial the Python catalog decimal alias covers DECIMAL64 and DECIMAL128. The descriptor rejects DECIMAL256.
 	return strings.EqualFold(rettype, "decimal") && (oid == types.T_decimal64 || oid == types.T_decimal128)
 }
 
