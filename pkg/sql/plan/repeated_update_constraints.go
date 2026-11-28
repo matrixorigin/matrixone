@@ -63,7 +63,7 @@ func appendRepeatedCandidate(
 	}, bindCtx)
 	for _, colIdx := range generated {
 		col := table.Cols[colIdx]
-		last, candidate[colIdx] = appendGeneratedUpdateColumn(builder, bindCtx, last, col, candidate, isIgnore)
+		last, candidate[colIdx] = appendGeneratedUpdateColumn(builder, bindCtx, last, 0, col, candidate, isIgnore)
 		names = append(names, col.Name)
 		proposals = append(proposals, candidate[colIdx])
 	}

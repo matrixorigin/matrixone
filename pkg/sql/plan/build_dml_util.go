@@ -4185,6 +4185,10 @@ func makePreUpdateDeletePlan(
 ) (int32, error) {
 	// lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 	lastNode := builder.qry.Nodes[lastNodeId]
+	rowTag := int32(0)
+	if delCtx.preserveUpdateSourceProjection {
+		rowTag = builder.genNewBindTag()
+	}
 
 	// append project Node to fetch the columns of this table
 	// in front of this projectList are update cols
@@ -4223,6 +4227,9 @@ func makePreUpdateDeletePlan(
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeId},
 		ProjectList: projectProjection,
+	}
+	if rowTag != 0 {
+		projectNode.BindingTags = []int32{rowTag}
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
@@ -4340,9 +4347,12 @@ func makePreUpdateDeletePlan(
 	// A foreign-key action supplies assignments without going through UPDATE binding.
 	if delCtx.isFkRecursionCall && delCtx.updateColLength > 0 {
 		var err error
-		lastNodeId, err = appendForeignKeyGeneratedUpdate(builder, bindCtx, lastNodeId, delCtx)
+		lastNodeId, err = appendForeignKeyGeneratedUpdate(builder, bindCtx, lastNodeId, rowTag, delCtx)
 		if err != nil || lastNodeId < 0 {
 			return lastNodeId, err
+		}
+		if rowTag != 0 {
+			rowTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
 		}
 	}
 
@@ -4351,7 +4361,7 @@ func makePreUpdateDeletePlan(
 	if delCtx.updateColLength > 0 && delCtx.checkMode != skipUpdateCheck && len(delCtx.tableDef.Checks) > 0 {
 		var err error
 		lastNodeId, err = appendCheckConstraintPlanWithColLookup(
-			builder, bindCtx, delCtx.tableDef, lastNodeId, 0,
+			builder, bindCtx, delCtx.tableDef, lastNodeId, rowTag,
 			func(name string, tablePos int32) (int32, bool) {
 				if pos, updated := delCtx.updateColPosMap[name]; updated {
 					return int32(pos), true
@@ -4371,6 +4381,7 @@ func makePreUpdateDeletePlan(
 	lockTarget := &plan.LockTarget{
 		TableId:            delCtx.tableDef.TblId,
 		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColRelPos:   rowTag,
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1,
 		LockTable:          false,
@@ -4380,8 +4391,11 @@ func makePreUpdateDeletePlan(
 		Children:    []int32{lastNodeId},
 		LockTargets: []*plan.LockTarget{lockTarget},
 	}
+	if rowTag != 0 {
+		lockNode.BindingTags = []int32{rowTag}
+	}
 	lastNodeId = builder.appendNode(lockNode, bindCtx)
-	if delCtx.preserveUpdateSourceProjection {
+	if rowTag != 0 {
 		// The REPLACE child writer reads fixed positions from this sink.
 		if builder.preserveLockProjection == nil {
 			builder.preserveLockProjection = make(map[int32]struct{})

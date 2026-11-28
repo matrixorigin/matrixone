@@ -398,9 +398,14 @@ func affectedGeneratedColumns(table *TableDef, names []string) ([]int, error) {
 // appendGeneratedUpdateColumn materializes one value so subsequent generated
 // columns and the write can read the same result.
 func appendGeneratedUpdateColumn(
-	builder *QueryBuilder, bindCtx *BindContext, last int32, col *ColDef, rowPositions []int, isIgnore bool,
+	builder *QueryBuilder, bindCtx *BindContext, last int32, inputTag int32, col *ColDef, rowPositions []int, isIgnore bool,
 ) (int32, int) {
 	input := getProjectionByLastNode(builder, last)
+	if inputTag != 0 {
+		for _, expr := range input {
+			expr.GetCol().RelPos = inputTag
+		}
+	}
 	lookup := make([]*Expr, len(rowPositions))
 	for i, pos := range rowPositions {
 		lookup[i] = input[pos]
@@ -408,14 +413,18 @@ func appendGeneratedUpdateColumn(
 	value := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), isIgnore)
 	value = substituteColRefsInExpr(value, lookup, 0)
 	valuePos := len(input)
-	last = builder.appendNode(&Node{
+	node := &Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{last}, ProjectList: append(input, value),
-	}, bindCtx)
+	}
+	if inputTag != 0 {
+		node.BindingTags = []int32{builder.genNewBindTag()}
+	}
+	last = builder.appendNode(node, bindCtx)
 	return last, valuePos
 }
 
 func appendForeignKeyGeneratedUpdate(
-	builder *QueryBuilder, bindCtx *BindContext, last int32, update *dmlPlanCtx,
+	builder *QueryBuilder, bindCtx *BindContext, last int32, rowTag int32, update *dmlPlanCtx,
 ) (int32, error) {
 	table := update.tableDef
 	hasGenerated := false
@@ -425,7 +434,7 @@ func appendForeignKeyGeneratedUpdate(
 		}
 		hasGenerated = true
 		if _, assigned := update.updateColPosMap[col.Name]; assigned {
-			return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+			return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
 				fmt.Sprintf("foreign key action assigning to generated column '%s'", col.Name))
 		}
 	}
@@ -454,7 +463,7 @@ func appendForeignKeyGeneratedUpdate(
 		// outgoing FK checks. A derived value has no such guarantee.
 		for _, fk := range table.Fkeys {
 			if slices.Contains(fk.Cols, col.ColId) {
-				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
 					fmt.Sprintf("foreign key action changing generated column '%s' constrained by another foreign key", col.Name))
 			}
 		}
@@ -468,19 +477,19 @@ func appendForeignKeyGeneratedUpdate(
 				}
 				for _, part := range index.Parts {
 					if catalog.ResolveAlias(part) == col.Name {
-						return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+						return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
 							"REPLACE foreign key action changing an indexed generated column")
 					}
 				}
 			}
 			if changesPK {
-				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
 					"REPLACE foreign key action changing a generated primary key")
 			}
 		}
 		if changesPK {
 			if slices.ContainsFunc(table.Indexes, isSyncMaintainedIrregularIndex) {
-				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
 					"update primary key on a table with a synchronous full-text/vector index")
 			}
 			update.updatePkCol = true
@@ -488,7 +497,10 @@ func appendForeignKeyGeneratedUpdate(
 	}
 	for _, i := range generated {
 		col := table.Cols[i]
-		last, rowPositions[i] = appendGeneratedUpdateColumn(builder, bindCtx, last, col, rowPositions, false)
+		last, rowPositions[i] = appendGeneratedUpdateColumn(builder, bindCtx, last, rowTag, col, rowPositions, false)
+		if rowTag != 0 {
+			rowTag = builder.qry.Nodes[last].BindingTags[0]
+		}
 		update.updateColPosMap[col.Name] = rowPositions[i]
 		update.updateColLength++
 	}
@@ -497,9 +509,10 @@ func appendForeignKeyGeneratedUpdate(
 
 // Replace the child write with an assertion over its matched rows.
 func appendRejectedForeignKeyUpdate(
-	builder *QueryBuilder, bindCtx *BindContext, last int32, rowID int, reason string,
+	builder *QueryBuilder, bindCtx *BindContext, last int32, rowTag int32, rowID int, reason string,
 ) (int32, error) {
 	projection := getProjectionByLastNode(builder, last)
+	projection[rowID].GetCol().RelPos = rowTag
 	absent, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*Expr{projection[rowID]})
 	if err != nil {
 		return -1, err
