@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -65,9 +66,9 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					// Equal edges and length deliberately put distinct values in one bucket.
 					values[i] = keyFor(rng.IntN(8))
 					timestamps[i], aborted[i] = int64(rng.IntN(16)), rng.IntN(4) == 0
-					containers.AppendValue(data, values[i], false)
-					containers.AppendValue(loader.commitTS, types.BuildTS(timestamps[i], 0), false)
-					containers.AppendValue(loader.abort, aborted[i], false)
+					data.MustAppendValue(values[i], false)
+					loader.commitTS.MustAppendValue(types.BuildTS(timestamps[i], 0), false)
+					loader.abort.MustAppendValue(aborted[i], false)
 				}
 				var selected nulls.Nulls
 				selected.Init(bitmapTestMP)
@@ -79,13 +80,13 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					if i >= 80 {
 						key = values[rng.IntN(len(values))]
 					}
-					containers.AppendValue(keys, key, false)
+					keys.MustAppendValue(key, false)
 					want[i] = -1
 					if i%11 == 0 {
-						containers.AppendValue(rows, objectio.NewRowid(&types.Blockid{}, 999), false)
+						rows.MustAppendValue(objectio.NewRowid(&types.Blockid{}, 999), false)
 						want[i] = 999
 					} else {
-						containers.AppendValue(rows, nil, true)
+						rows.MustAppendValue(nil, true)
 					}
 					if i%3 == 0 {
 						continue
@@ -119,7 +120,7 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 				for i, row := range want {
 					require.Equal(t, row < 0, rows.IsNull(uint64(i)), "probe %d", i)
 					if row >= 0 {
-						rowID := containers.GetValue(rows, i).(types.Rowid)
+						rowID := rows.GetValue(i).(types.Rowid)
 						require.Equal(t, uint32(row), rowID.GetRowOffset(), "probe %d", i)
 					}
 				}
@@ -163,7 +164,7 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 					if tc.empty && i >= 5 && i < 7 {
 						key = []byte{}
 					}
-					containers.AppendValue(data, key, tc.empty && i == 6)
+					data.MustAppendValue(key, tc.empty && i == 6)
 				}
 				keys := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 				defer containers.ReleaseVector(keys)
@@ -180,8 +181,8 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 					if i == warmup && tc.colliding && tc.miss {
 						key = []byte("0123456789abcdefccccfedcba9876543210")
 					}
-					containers.AppendValue(keys, key, false)
-					containers.AppendValue(rows, nil, true)
+					keys.MustAppendValue(key, false)
+					rows.MustAppendValue(nil, true)
 				}
 				loads := 0
 				loader := &commitTSLoader{}
@@ -205,8 +206,8 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 						case 0:
 							ts = types.BuildTS(12, 0)
 						}
-						containers.AppendValue(loader.commitTS, ts, i == 5 && !tc.empty)
-						containers.AppendValue(loader.abort, !tc.empty && (i == 6 || (i == 5 && tc.abortMissing)), false)
+						loader.commitTS.MustAppendValue(ts, i == 5 && !tc.empty)
+						loader.abort.MustAppendValue(!tc.empty && (i == 6 || (i == 5 && tc.abortMissing)), false)
 					}
 					return loader.commitTS, loader.abort, nil
 				}
@@ -239,12 +240,12 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 					require.True(t, rows.IsNull(uint64(warmup)))
 				} else {
 					require.False(t, rows.IsNull(uint64(warmup)))
-					rowID := containers.GetValue(rows, warmup).(types.Rowid)
+					rowID := rows.GetValue(warmup).(types.Rowid)
 					require.Equal(t, uint32(tc.wantRow), rowID.GetRowOffset())
 					// Later probes must not overwrite a row resolved by an earlier block.
-					containers.UpdateRow(keys, warmup, filler, false)
+					containers.UpdateValue(keys, uint32(warmup), filler, false, keys.MPool())
 					require.NoError(t, containers.ForeachVector(keys, op, nil))
-					require.Equal(t, rowID, containers.GetValue(rows, warmup))
+					require.Equal(t, rowID, rows.GetValue(warmup))
 					require.Equal(t, 1, loads)
 				}
 			})
@@ -279,12 +280,12 @@ func BenchmarkPersistedByteDedup(b *testing.B) {
 				return key
 			}
 			for i := 0; i < shape.rows; i++ {
-				containers.AppendValue(data, keyFor(i, false), false)
-				containers.AppendValue(loader.commitTS, types.BuildTS(5, 0), false)
+				data.MustAppendValue(keyFor(i, false), false)
+				loader.commitTS.MustAppendValue(types.BuildTS(5, 0), false)
 			}
 			for i := 0; i < shape.probes; i++ {
-				containers.AppendValue(keys, keyFor(i, true), false)
-				containers.AppendValue(rows, nil, true)
+				keys.MustAppendValue(keyFor(i, true), false)
+				rows.MustAppendValue(nil, true)
 			}
 			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
 			b.ReportAllocs()
@@ -306,27 +307,32 @@ func TestPersistedByteDedupConstantBlock(t *testing.T) {
 			key := []byte("pk")
 			var data containers.Vector
 			if nullBlock {
-				data = containers.NewConstNullVector(types.T_varchar.ToType(), 65, common.DefaultAllocator)
+				data = vector.NewConstNull(types.T_varchar.ToType(), 65, common.DefaultAllocator)
 				key = nil
 			} else {
-				data = containers.NewConstBytes(types.T_varchar.ToType(), key, 65)
+				var err error
+				data, err = vector.NewConstBytes(types.T_varchar.ToType(), key, 65, common.DefaultAllocator)
+				require.NoError(t, err)
 			}
 			defer containers.ReleaseVector(data)
-			keys := containers.NewConstBytes(types.T_varchar.ToType(), key, 33)
+			keys, err := vector.NewConstBytes(types.T_varchar.ToType(), key, 33, common.DefaultAllocator)
+			require.NoError(t, err)
 			defer containers.ReleaseVector(keys)
 			rows := containers.MakeVector(objectio.RowidType, common.DefaultAllocator)
 			defer containers.ReleaseVector(rows)
 			for range 33 {
-				containers.AppendValue(rows, nil, true)
+				rows.MustAppendValue(nil, true)
 			}
-			loader := &commitTSLoader{loaded: true, commitTS: containers.NewConstFixed(types.T_TS.ToType(), types.BuildTS(5, 0), 65)}
+			commitTS, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(5, 0), 65, common.DefaultAllocator)
+			require.NoError(t, err)
+			loader := &commitTSLoader{loaded: true, commitTS: commitTS}
 			defer loader.close()
 			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
 			op := containers.MakeForeachVectorOp(types.T_varchar, getRowIDAlkFunctions, data, rows, types.Blockid{}, loader, txn, types.TS{}, types.MaxTs())
 			require.NoError(t, containers.ForeachVector(keys, op, nil))
 			for i := range rows.Length() {
 				require.False(t, rows.IsNull(uint64(i)))
-				rowID := containers.GetValue(rows, i).(types.Rowid)
+				rowID := rows.GetValue(i).(types.Rowid)
 				require.Equal(t, uint32(64), rowID.GetRowOffset())
 			}
 		})

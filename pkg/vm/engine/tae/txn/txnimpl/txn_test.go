@@ -110,7 +110,7 @@ func (data *dedupConflictObjectData) GetDuplicatedRows(
 	rowIDs containers.Vector,
 	_ *mpool.MPool,
 ) error {
-	containers.UpdateRow(rowIDs, 0, data.rowID, false)
+	containers.UpdateValue(rowIDs, uint32(0), data.rowID, false, rowIDs.MPool())
 	return moerr.NewTxnWWConflictNoCtx(0, "")
 }
 
@@ -151,7 +151,7 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 	})
 	pks := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(pks)
-	containers.AppendValue(pks, int64(1), false)
+	pks.MustAppendValue(int64(1), false)
 
 	rowIDs, err := table.incrementalGetRowsByPK(
 		context.Background(),
@@ -250,7 +250,8 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 	require.True(t, candidates.appendable.IsNull(uint64(candidates.appendableByKey[0][0])))
 	require.False(t, candidates.nonAppendable.IsNull(uint64(candidates.nonAppendableByKey[0][0])))
 
-	merged := candidates.Merge(pool)
+	merged, err := candidates.Merge(pool)
+	require.NoError(t, err)
 	defer containers.ReleaseVector(merged)
 	require.False(t, merged.IsNull(0))
 	require.Equal(t, nonAppendableID, vector.GetFixedAtNoTypeCheck[types.Rowid](merged, 0))
@@ -428,7 +429,7 @@ func TestDedupSnapByPKClosesCandidatesOnWWConflict(t *testing.T) {
 
 	keys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(keys)
-	containers.AppendValue(keys, int64(1), false)
+	keys.MustAppendValue(int64(1), false)
 
 	err := tbl.DedupSnapByPK(context.Background(), keys, false)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
@@ -862,7 +863,7 @@ func TestConcurrentFreezeAppendReservations(t *testing.T) {
 	require.NoError(t, err)
 	pkIdx := schema.GetSingleSortKeyIdx()
 	for row := 0; row < allRows.Length(); row++ {
-		pk := containers.GetValue(allRows.Vecs[pkIdx], row)
+		pk := allRows.Vecs[pkIdx].GetValue(row)
 		value, isNull, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(pk), pkIdx)
 		require.NoError(t, err)
 		require.False(t, isNull)
@@ -996,7 +997,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchInsert(bat.Attrs[1], bat.Vecs[1], 0, bat.Vecs[1].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window := containers.Window(bat.Vecs[1], 20, 2)
+	window, err := bat.Vecs[1].Window(20, 22)
+	require.NoError(t, err)
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[1], window)
 	assert.NotNil(t, err)
@@ -1010,7 +1012,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchInsert(bat.Attrs[12], bat.Vecs[12], 0, bat.Vecs[12].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window = containers.Window(bat.Vecs[12], 20, 2)
+	window, err = bat.Vecs[12].Window(20, 22)
+	require.NoError(t, err)
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[12], window)
 	assert.Error(t, err)
@@ -1025,7 +1028,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchInsert(bat.Attrs[19], bat.Vecs[19], 0, bat.Vecs[19].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window = containers.Window(bat.Vecs[19], 20, 2)
+	window, err = bat.Vecs[19].Window(20, 22)
+	require.NoError(t, err)
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[19], window)
 	assert.Error(t, err)
@@ -1066,8 +1070,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx := NewSimpleTableIndex()
 		vec := makeWorkspaceVector(types.T_varchar.ToType())
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, []byte("dup"), false)
-		containers.AppendValue(vec, []byte("dup"), false)
+		vec.MustAppendValue([]byte("dup"), false)
+		vec.MustAppendValue([]byte("dup"), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
 		assert.Error(t, err)
@@ -1079,7 +1083,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx.tree["dup"] = 1
 		vec := makeWorkspaceVector(types.T_varchar.ToType())
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, []byte("dup"), false)
+		vec.MustAppendValue([]byte("dup"), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
 		assert.Error(t, err)
@@ -1091,7 +1095,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx.tree["dup"] = 1
 		vec := makeWorkspaceVector(types.T_varchar.ToType())
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, []byte("dup"), false)
+		vec.MustAppendValue([]byte("dup"), false)
 
 		err := idx.BatchDedup("pk", vec)
 		assert.Error(t, err)
@@ -1103,8 +1107,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
 		defer containers.ReleaseVector(vec)
 		val := types.ArrayToBytes([]float32{1, 2})
-		containers.AppendValue(vec, val, false)
-		containers.AppendValue(vec, val, false)
+		vec.MustAppendValue(val, false)
+		vec.MustAppendValue(val, false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
 		assert.Error(t, err)
@@ -1117,7 +1121,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, types.ArrayToBytes([]float32{1, 2}), false)
+		vec.MustAppendValue(types.ArrayToBytes([]float32{1, 2}), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
 		assert.Error(t, err)
@@ -1130,7 +1134,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, types.ArrayToBytes([]float32{1, 2}), false)
+		vec.MustAppendValue(types.ArrayToBytes([]float32{1, 2}), false)
 
 		err := idx.BatchDedup("pk", vec)
 		assert.Error(t, err)
@@ -1142,8 +1146,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
 		defer containers.ReleaseVector(vec)
 		val := types.ArrayToBytes([]float64{1, 2})
-		containers.AppendValue(vec, val, false)
-		containers.AppendValue(vec, val, false)
+		vec.MustAppendValue(val, false)
+		vec.MustAppendValue(val, false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
 		assert.Error(t, err)
@@ -1156,7 +1160,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, types.ArrayToBytes([]float64{1, 2}), false)
+		vec.MustAppendValue(types.ArrayToBytes([]float64{1, 2}), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
 		assert.Error(t, err)
@@ -1169,7 +1173,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, types.ArrayToBytes([]float64{1, 2}), false)
+		vec.MustAppendValue(types.ArrayToBytes([]float64{1, 2}), false)
 
 		err := idx.BatchDedup("pk", vec)
 		assert.Error(t, err)
@@ -1990,12 +1994,12 @@ func TestPrePrepareDedupRangeCoverage(t *testing.T) {
 				bat := containers.BuildBatch(base.schema.Attrs(), base.schema.Types(), containers.Options{Allocator: common.DefaultAllocator})
 				defer bat.Close()
 				for _, vec := range bat.Vecs {
-					containers.AppendValue(vec, nil, true)
+					vec.MustAppendValue(nil, true)
 				}
 				if isTombstone {
-					containers.UpdateRow(bat.Vecs[0], 0, types.Rowid{}, false)
+					containers.UpdateValue(bat.Vecs[0], uint32(0), types.Rowid{}, false, bat.Vecs[0].MPool())
 				} else {
-					containers.UpdateRow(bat.Vecs[0], 0, int64(1), false)
+					containers.UpdateValue(bat.Vecs[0], uint32(0), int64(1), false, bat.Vecs[0].MPool())
 				}
 				base.tableSpace = &tableSpace{node: &anode{data: bat, rows: 1}}
 				oid := objectio.NewObjectid()

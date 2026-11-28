@@ -10,7 +10,6 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_columns;
-drop user if exists test_rule_user_legacy;
 drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
@@ -31,7 +30,6 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_columns;
-drop role if exists test_rule_role_legacy;
 drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;
@@ -239,25 +237,94 @@ not supported: renaming a table while any role rewrite rules exist is not suppor
 select * from db1.t_rename_chain_guard;
 ➤ a[4,32,0]
 7
-create table db1.t_rename_legacy(a int, age int);
-insert into db1.t_rename_legacy values (1,1),(100,30);
-create role test_rule_role_legacy;
-alter role test_rule_role_legacy add rule "select * from db1.t_rename_legacy where age > 28" on table db1.` t_rename_legacy`;
-create user test_rule_user_legacy identified by '123456' default role test_rule_role_legacy;
-grant connect on account * to test_rule_role_legacy;
-grant select on table db1.t_rename_legacy to test_rule_role_legacy;
-set enable_remap_hint = 1;
-select * from db1.t_rename_legacy order by a;
+drop account if exists role_rule_case_modes;
+create account role_rule_case_modes admin_name 'admin' identified by '123456';
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+0
+create database rule_db;
+create table rule_db.t_target(id int);
+create table rule_db.t_source(id int);
+create table rule_db.T_SOURCE(id int);
+insert into rule_db.t_target values (4);
+insert into rule_db.t_source values (2),(3);
+insert into rule_db.T_SOURCE values (2),(3),(4);
+create role case_primary, case_later;
+alter role case_primary add rule "select id from rule_db.t_source where id = 3" on table rule_db.t_target;
+alter role case_later add rule "select id from rule_db.T_SOURCE where id = 2" on table rule_db.t_target;
+create user case_reader identified by '123456' default role case_primary;
+grant connect on account * to case_primary, case_later;
+grant select on table rule_db.t_target to case_primary, case_later;
+grant select on table rule_db.t_source to case_primary, case_later;
+grant select on table rule_db.T_SOURCE to case_primary, case_later;
+grant case_later to case_reader;
+create table rule_db.t_catalog(id int);
+create table rule_db.T_CATALOG(id int);
+create role case_replace, case_drop;
+alter role case_replace add rule "select id from rule_db.t_source where id = 2" on table rule_db.T_CATALOG;
+alter role case_replace add rule "select id from rule_db.t_source where id = 3" on table rule_db.t_catalog;
+alter role case_drop add rule "select id from rule_db.t_source where id = 2" on table rule_db.T_CATALOG;
+show rules on role case_replace;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_CATALOG  ¦  select id from rule_db.t_source where id = 2  𝄀
+rule_db.t_catalog  ¦  select id from rule_db.t_source where id = 3
+show rules on role case_drop;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_CATALOG  ¦  select id from rule_db.t_source where id = 2
+create table rule_db.t_rename_legacy(a int, age int);
+create table rule_db.T_RENAME_LEGACY(a int, age int);
+insert into rule_db.t_rename_legacy values (1,1),(100,30);
+create role case_rename;
+alter role case_rename add rule "select id as a, id as age from rule_db.t_source where id = 3" on table rule_db.T_RENAME_LEGACY;
+create user case_rename_reader identified by '123456' default role case_rename;
+grant connect on account * to case_rename;
+grant select on table rule_db.t_rename_legacy to case_rename;
+grant select on table rule_db.t_source to case_rename;
+select id from rule_db.t_target order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from rule_db.t_target order by id;
+➤ id[4,32,0]  𝄀
+2
+grant case_later to case_primary;
+select id from rule_db.t_target order by id;
+➤ id[4,32,0]  𝄀
+2
+set global lower_case_table_names = 1;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+1
+alter role case_replace add rule "select id from rule_db.t_source where id = 4" on table rule_db.T_CATALOG;
+show rules on role case_replace;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.t_catalog  ¦  select id from rule_db.t_source where id = 4
+show rules on role case_drop;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_CATALOG  ¦  select id from rule_db.t_source where id = 2
+alter role case_drop drop rule on table rule_db.t_catalog;
+show rules on role case_drop;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]
+show rules on role case_replace;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.t_catalog  ¦  select id from rule_db.t_source where id = 4
+show rules on role case_rename;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_RENAME_LEGACY  ¦  select id as a, id as age from rule_db.t_source where id = 3
+select * from rule_db.t_rename_legacy order by a;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
-100  ¦  30
-alter table db1.t_rename_legacy rename to db1.t_rename_legacy_after;
+3  ¦  3
+alter table rule_db.t_rename_legacy rename to rule_db.t_rename_legacy_after;
 not supported: renaming a table while any role rewrite rules exist is not supported; drop all rules first
-rename table db1.t_rename_legacy to db1.t_rename_legacy_after;
+rename table rule_db.t_rename_legacy to rule_db.t_rename_legacy_after;
 not supported: renaming a table while any role rewrite rules exist is not supported; drop all rules first
-set enable_remap_hint = 1;
-select * from db1.t_rename_legacy order by a;
+select * from rule_db.t_rename_legacy order by a;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
-100  ¦  30
+3  ¦  3
+drop account role_rule_case_modes;
+select count(*) from mo_catalog.mo_account where account_name = 'role_rule_case_modes';
+➤ count(*)[-5,64,0]  𝄀
+0
 create table db1.t_rename_rule_dependency(id int primary key, tenant_id int);
 insert into db1.t_rename_rule_dependency values (1,1),(2,2);
 create table db1.t_rename_rule_allowlist(tenant_id int);
@@ -328,12 +395,30 @@ alter role test_rule_role_inherit_b add rule "select a, age from db2.t2 where ag
 create user test_rule_user_inherit identified by '123456' default role test_rule_role_inherit_a;
 grant connect on account * to test_rule_role_inherit_a;
 grant select on table db2.t2 to test_rule_role_inherit_b;
+create table db2.t_string(name varchar(10));
+insert into db2.t_string values ('Alice'),('Bob'),('Cara');
+alter role test_rule_role_inherit_a add rule "select name from db2.t_string where name = 'Alice'" on table db2.t_string;
+alter role test_rule_role_inherit_b add rule "select name from db2.t_string where name = 'Bob'" on table db2.t_string;
+grant select on table db2.t_string to test_rule_role_inherit_a;
+grant select on table db2.t_string to test_rule_role_inherit_b;
+grant connect on account * to test_rule_role_inherit_b;
+grant test_rule_role_inherit_b to test_rule_user_inherit;
+select name from db2.t_string order by name;
+➤ name[12,10,0]  𝄀
+Alice
+select name from db2.t_string order by name;
+➤ name[12,10,0]  𝄀
+Bob
 grant test_rule_role_inherit_b to test_rule_role_inherit_a;
 set enable_remap_hint = 1;
 select * from db2.t2 order by a;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
 20  ¦  35  𝄀
 200  ¦  60
+select name from db2.t_string order by name;
+➤ name[12,10,0]  𝄀
+Alice  𝄀
+Bob
 alter role test_rule_role_inherit_a add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 10" on table db2.t2;
 alter role test_rule_role_inherit_b add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 20" on table db2.t2;
 set enable_remap_hint = 1;
@@ -581,17 +666,16 @@ select count(*) from db1.t_dup;
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_expr_projection_b add rule "select a + 1 as b from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_expr_projection_b add rule "select a + 1 as B from db1.t_dup where marker = 2" on table db1.t_dup;
 create user test_rule_user_expr_projection identified by '123456' default role test_rule_role_expr_projection_a;
 grant connect on account * to test_rule_role_expr_projection_a;
 grant select on table db1.t_dup to test_rule_role_expr_projection_a;
 grant select on table db1.t_dup to test_rule_role_expr_projection_b;
-grant test_rule_role_expr_projection_b to test_rule_user_expr_projection;
+grant test_rule_role_expr_projection_b to test_rule_role_expr_projection_a;
 set enable_remap_hint = 1;
-set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
 ➤ b[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
-2  ¦  1
+2  ¦  2
 create user test_rule_user_show identified by '123456';
 show rules on role test_rule_role_validate;
 internal error: do not have privilege to execute the statement
@@ -606,7 +690,6 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_columns;
-drop user if exists test_rule_user_legacy;
 drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
@@ -627,7 +710,6 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_columns;
-drop role if exists test_rule_role_legacy;
 drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;

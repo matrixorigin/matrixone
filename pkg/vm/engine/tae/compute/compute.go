@@ -235,7 +235,7 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Nulls) (offse
 		var mid int
 		for start <= end {
 			mid = (start + end) / 2
-			res := bytes.Compare(containers.ShallowGetValue(data, mid).([]byte), val)
+			res := bytes.Compare(data.GetBytesAt(mid), val)
 			if res > 0 {
 				end = mid - 1
 			} else if res < 0 {

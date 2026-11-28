@@ -291,7 +291,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 
 	if task.isTombstone {
 		mergeStartTS := task.txn.GetStartTS()
-		err = containers.Foreach(data.Vecs[0], func(v any, isNull bool, row int) error {
+		err = containers.ForeachVectorWindow(data.Vecs[0], 0, data.Vecs[0].Length(), nil, func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
 			objectID := rowID.BorrowObjectID()
 			obj, err := task.tableEntry.GetObjectByID(objectID, false)

@@ -106,17 +106,17 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		for k := range idx.tree {
-			containers.AppendValue(vec, []byte(k.(string)), false)
+			vec.MustAppendValue([]byte(k.(string)), false)
 		}
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		// No usage for this func.
 		for k := range idx.tree {
-			containers.AppendValue(vec, k.([]byte), false)
+			vec.MustAppendValue(k.([]byte), false)
 		}
 	default:
 		for k := range idx.tree {
-			containers.AppendValue(vec, k, false)
+			vec.MustAppendValue(k, false)
 		}
 	}
 	return vec
@@ -133,7 +133,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = makeWorkspaceVector(kType)
 			}
-			containers.AppendValue(vec, []byte(k.(string)), false)
+			vec.MustAppendValue([]byte(k.(string)), false)
 		}
 	case types.T_array_float32:
 		// No usage for this func.
@@ -142,7 +142,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = makeWorkspaceVector(kType)
 			}
-			containers.AppendValue(vec, types.BytesToArrayToString[float32](k.([]byte)), false)
+			vec.MustAppendValue(types.BytesToArrayToString[float32](k.([]byte)), false)
 		}
 	case types.T_array_float64:
 		for k := range idx.tree {
@@ -150,7 +150,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = makeWorkspaceVector(kType)
 			}
-			containers.AppendValue(vec, types.BytesToArrayToString[float64](k.([]byte)), false)
+			vec.MustAppendValue(types.BytesToArrayToString[float64](k.([]byte)), false)
 		}
 	default:
 		for k := range idx.tree {
@@ -158,7 +158,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = makeWorkspaceVector(kType)
 			}
-			containers.AppendValue(vec, k, false)
+			vec.MustAppendValue(k, false)
 		}
 	}
 	if vec.Length() > 0 {

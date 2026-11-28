@@ -32,9 +32,10 @@ func TestSimpleTableIndexDecimal256Key(t *testing.T) {
 	require.NoError(t, idx.BatchDedup("pk", keys))
 	require.NoError(t, idx.BatchInsert("pk", keys, 0, keys.Length(), 0, false))
 
-	dup := containers.Window(keys, 40, 3)
+	dup, err := keys.Window(40, 43)
+	require.NoError(t, err)
 	require.Error(t, idx.BatchDedup("pk", dup), "keys already in the index are duplicates")
-	err := idx.BatchInsert("pk", keys, 10, 1, 0, false)
+	err = idx.BatchInsert("pk", keys, 10, 1, 0, false)
 	require.Error(t, err, "inserting a key already in the index fails")
 	require.Contains(t, err.Error(), "10", "the duplicate key is named")
 

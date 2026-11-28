@@ -378,8 +378,14 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 			rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), entry.rt.VectorPool.Small.GetMPool())
 		}
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*targetObj.GetID(), destpos.BlkIdx, destpos.RowIdx)
-		containers.AppendValue(rowIDVec, rowID, false)
-		containers.AppendValue(pkVec, containers.GetValue(deletesPK, i), false)
+		if err = vector.AppendFixed(rowIDVec, rowID, false, rowIDVec.MPool()); err == nil {
+			err = pkVec.UnionOne(deletesPK, int64(i), pkVec.MPool())
+		}
+		if err != nil {
+			containers.ReleaseVector(rowIDVec)
+			containers.ReleaseVector(pkVec)
+			return
+		}
 		pendingDels.add(rowid[i])
 		transCnt++
 	}

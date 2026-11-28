@@ -75,6 +75,26 @@ func (ts Timestamp) String() string {
 
 // String2 stringify timestamp, including its fractional seconds precision part(fsp)
 func (ts Timestamp) String2(loc *time.Location, scale int32) string {
+	if ts == ZeroTimestamp || scale > 6 {
+		return timestampString2Slow(ts, loc, scale)
+	}
+	t := time.UnixMicro(int64(ts) - unixEpochMicroSecs).In(loc)
+	y, m, d := t.Date()
+	if y < 0 || y > 9999 {
+		return timestampString2Slow(ts, loc, scale)
+	}
+	hour, minute, sec := t.Clock()
+	var buf [32]byte
+	b := appendDateClock(buf[:0], y, int(m), d, hour, minute, sec)
+	if scale > 0 {
+		b = appendFraction(b, int64(t.Nanosecond()/1000), scale)
+	}
+	return string(b)
+}
+
+// timestampString2Slow is String2 through fmt, for years outside 0..9999 and
+// for a scale above 6, which it does not support.
+func timestampString2Slow(ts Timestamp, loc *time.Location, scale int32) string {
 	if ts == ZeroTimestamp {
 		if scale > 0 {
 			return "0000-00-00 00:00:00." + strings.Repeat("0", int(scale))
