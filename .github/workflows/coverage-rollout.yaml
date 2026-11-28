@@ -33,7 +33,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@0c56a221c359305c20270aeb9af6b64172d6a1a6
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@302d5c84aead463df8cb9f0499e2d706bb78ec04
     with:
       bvt_generation: ${{ inputs.bvt_generation }}
       enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
