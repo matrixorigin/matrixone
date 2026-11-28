@@ -15,21 +15,27 @@
 package function
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 type Udf struct {
@@ -56,6 +62,7 @@ type Udf struct {
 	Volatility                      string       `json:"volatility,omitempty"`
 	NullPolicy                      string       `json:"null_policy,omitempty"`
 	SQLMode                         *string      `json:"-"`
+	LegacyPower                     bool         `json:"-"`
 	ArgsType                        []types.Type `json:"-"`
 	// PythonArgTypes and PythonReturnType preserve the exact SQL declaration
 	// for Python's Arrow contract. The legacy catalog's args/rettype columns
@@ -63,6 +70,120 @@ type Udf struct {
 	// width and scale validation.
 	PythonArgTypes   []PythonTypeDescriptor `json:"-"`
 	PythonReturnType *PythonTypeDescriptor  `json:"-"`
+}
+
+// This header cannot start a valid SQL expression or SELECT. Mark only new
+// authoring; catalog copies and restores must retain the original body format.
+const sqlUdfPowerNullHeader = "{mo_sql_udf_pow_null_v1}\n"
+
+func EncodeSQLUdfBody(body string) string {
+	return sqlUdfPowerNullHeader + body
+}
+
+// DecodeSQLUdfBody returns the SQL text and whether it was authored with
+// row-local NULL results for POW.
+func DecodeSQLUdfBody(body string) (string, bool) {
+	return strings.CutPrefix(body, sqlUdfPowerNullHeader)
+}
+
+// DecodeUdfCatalogBody returns the executable body and its legacy POW binding.
+// Other languages keep their own body format.
+func DecodeUdfCatalogBody(language, body string) (string, bool) {
+	if language != string(tree.SQL) {
+		return body, false
+	}
+	sql, nullOnNonFinite := DecodeSQLUdfBody(body)
+	return sql, !nullOnNonFinite
+}
+
+// ParseSQLUdfBody parses either a complete query or a scalar expression.
+// A standalone query owns its set operators and outer clauses. A parenthesized
+// subquery can also be part of a larger expression, so only the parser can
+// decide whether leading parentheses start a complete query. queryBody remains
+// true on errors following an unambiguous query prefix. The caller owns
+// statements on success. A non-nil scalar borrows the first statement's AST.
+func ParseSQLUdfBody(ctx context.Context, body string, lowerCaseTableNames int64, sqlMode string) (
+	statements []tree.Statement, scalar tree.Expr, queryBody bool, err error,
+) {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, body, mysql.ParseSQLModeFlags(sqlMode))
+	token, _ := scanner.Scan()
+	for token == ';' {
+		// The statement parser discards leading empty statements.
+		token, _ = scanner.Scan()
+	}
+	// The MySQL SELECT entry points include TABLE, which the parser lowers
+	// to SELECT. Top-level VALUES produces a different statement type, while
+	// VALUES(column) can be a scalar expression.
+	explicitQuery := token == mysql.SELECT || token == mysql.WITH || token == mysql.TABLE
+	tryQuery := token == '('
+	if token == mysql.PERFORM {
+		// PERFORM is also an identifier. SELECT and WITH unambiguously start
+		// its query production. A parenthesized term requires the parser to
+		// determine whether it is part of a complete set operation.
+		next, _ := scanner.Scan()
+		explicitQuery = next == mysql.SELECT || next == mysql.WITH
+		tryQuery = next == '('
+	}
+	mysql.PutScanner(scanner)
+	if explicitQuery || tryQuery {
+		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, body, lowerCaseTableNames, sqlMode)
+		if err == nil {
+			if selectStmt := firstSQLUdfSelect(statements); selectStmt != nil {
+				if token == '(' {
+					if subquery := sqlUdfParenthesizedScalar(selectStmt); subquery != nil {
+						return statements, subquery, false, nil
+					}
+				}
+				return statements, nil, true, nil
+			}
+			for _, statement := range statements {
+				statement.Free()
+			}
+			err = moerr.NewParseError(ctx, "expected a query in SQL function body")
+		}
+		var syntaxErr mysql.PositionedErr
+		if explicitQuery || !errors.As(err, &syntaxErr) {
+			return nil, nil, true, err
+		}
+	}
+
+	statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, "select "+body, lowerCaseTableNames, sqlMode)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if selectStmt := firstSQLUdfSelect(statements); selectStmt != nil {
+		if projection, ok := selectStmt.Select.(*tree.SelectClause); ok && projection != nil && len(projection.Exprs) > 0 &&
+			projection.Exprs[0].Expr != nil {
+			return statements, projection.Exprs[0].Expr, false, nil
+		}
+	}
+	for _, statement := range statements {
+		statement.Free()
+	}
+	return nil, nil, false, moerr.NewParseError(ctx, "expected a scalar expression in SQL function body")
+}
+
+// An unmodified parenthesized SELECT also parses as a scalar subquery. Reuse
+// the parsed inner query and keep the scalar binder behavior for stored bodies
+// of that form. Clauses attached outside the parentheses belong to the query.
+func sqlUdfParenthesizedScalar(stmt *tree.Select) *tree.Subquery {
+	paren, ok := stmt.Select.(*tree.ParenSelect)
+	if !ok || stmt.TimeWindow != nil || len(stmt.OrderBy) != 0 || stmt.Limit != nil ||
+		stmt.RankOption != nil || stmt.Ep != nil || len(stmt.IntoVars) != 0 || stmt.SelectLockInfo != nil {
+		return nil
+	}
+	return tree.NewSubquery(paren, false)
+}
+
+func firstSQLUdfSelect(statements []tree.Statement) *tree.Select {
+	if len(statements) == 0 {
+		return nil
+	}
+	stmt, _ := statements[0].(*tree.Select)
+	if stmt == nil || stmt.Select == nil {
+		return nil
+	}
+	return stmt
 }
 
 type UdfWithContext struct {

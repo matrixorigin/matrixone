@@ -225,11 +225,19 @@ func inferViewColumns(
 	viewName string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
-	if !forAuthoring {
-		// Description and regeneration rebind a stored definition, not the
-		// caller's SQL namespace. Authoring must still reject temporary sources.
+	stored, hasStoredDefinition := ctx.(*viewRegenerationContext)
+	if hasStoredDefinition || !forAuthoring {
 		previous := ctx.GetContext()
-		ctx.SetContext(defines.WithPersistentViewBinding(previous))
+		binding := previous
+		if hasStoredDefinition {
+			binding = function.WithPersistedPowerBinding(binding, !stored.powerNullOnNonFinite)
+		}
+		if !forAuthoring {
+			// Description and regeneration resolve names in the stored view.
+			// Authoring, including restore-owned CREATE, checks temporary sources.
+			binding = defines.WithPersistentViewBinding(binding)
+		}
+		ctx.SetContext(binding)
 		defer ctx.SetContext(previous)
 	}
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
@@ -460,6 +468,7 @@ func genViewTableDef(
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
 		LowerCaseTableNames:     &lowerCaseTableNames,
 		Dependencies:            inferred.dependencies,
+		PowerNullOnNonFinite:    true,
 		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {
@@ -4001,6 +4010,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.generated != nil {
 					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
 				} else {
+					if replay != nil && replay.target != nil &&
+						retainedGeneratedPower(FindColumn(replay.target.Cols, colName)) {
+						return retainedGeneratedPowerReplayError(ctx.GetContext(), colNameOrigin)
+					}
 					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(replay, colName))
 				}
 				if err != nil {
@@ -4950,11 +4963,12 @@ func appendCheckDef(
 	}
 	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil && replay.target != nil {
 		for _, check := range replay.target.Checks {
-			if strings.EqualFold(check.Name, checkName) && containsLegacyCRC32(check.Check) {
+			if strings.EqualFold(check.Name, checkName) {
 				// Raw catalog coordinates belong to the old schema. Only replay
 				// can preserve them after a reorder and verify input compatibility.
-				// Neither copying them nor rebinding display SQL is a safe fallback.
-				return moerr.NewNotSupported(ctx.GetContext(), "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+				if err := retainedCheckReplayError(ctx.GetContext(), check); err != nil {
+					return err
+				}
 			}
 		}
 	}

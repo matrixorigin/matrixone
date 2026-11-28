@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -6189,15 +6188,20 @@ func bindFuncExprImplUdf(
 		}
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
-		// if does not contain SELECT, an expression. In order to pass the parser,
-		// make it start with a 'SELECT'.
-
-		expressionBody := !strings.Contains(sql, "select")
+		substmts, bodyExpr, queryBody, err := function.ParseSQLUdfBody(b.GetContext(), sql, 1, parserSQLMode)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, stmt := range substmts {
+				stmt.Free()
+			}
+		}()
 		if requiresUDFSourceValidation {
 			used := make(map[*plan.Expr]struct{}, len(udfArgs))
 			for _, arg := range udfArgs {
 				used[arg] = struct{}{}
-				if expressionBody {
+				if !queryBody {
 					continue
 				}
 				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, arg)
@@ -6230,34 +6234,29 @@ func bindFuncExprImplUdf(
 				}
 			}
 		}
-		if expressionBody {
-			sql = "select " + sql
-		}
-		substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			for _, stmt := range substmts {
-				stmt.Free()
-			}
-		}()
-		var bodyExpr tree.Expr
-		if expressionBody {
-			bodyExpr = substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-		}
 		if valueBinder, ok := b.impl.(*DefaultBinder); ok && valueBinder.allowSubquery &&
 			b.builder != nil && b.builder.valuesSubqueryBinding.rows != nil {
 			// The caller's VALUES AST does not contain subqueries introduced by
 			// a SQL UDF. Inspect the parsed expression as well as query bodies,
 			// before either binder can create a relational branch. SQL spelling
 			// and wrappers must not bypass the statement's admission boundary.
-			if !expressionBody || valueExprContainsSubquery(bodyExpr) {
+			if queryBody || valueExprContainsSubquery(bodyExpr) {
 				return nil, moerr.NewNotSupported(b.GetContext(),
 					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
 			}
 		}
-		if expressionBody {
+		// The call arguments already belong to the caller. Only the SQL body
+		// receives the UDF's persisted policy, including its child query binder.
+		caller := b.sysCtx
+		b.sysCtx = function.WithPersistedPowerBinding(caller, udf.LegacyPower)
+		defer func() { b.sysCtx = caller }()
+		if b.builder != nil && b.builder.compCtx != nil {
+			cc := b.builder.compCtx
+			previous := cc.GetContext()
+			cc.SetContext(function.WithPersistedPowerBinding(previous, udf.LegacyPower))
+			defer cc.SetContext(previous)
+		}
+		if !queryBody {
 			expr, err := b.impl.BindExpr(bodyExpr, depth, false)
 			if err != nil {
 				return nil, err
@@ -6364,6 +6363,93 @@ func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerFor
 
 	result.WriteString(sql[written:])
 	return result.String()
+}
+
+// RewriteSQLUdfBodyPreservingArguments keeps bare positional parameters
+// distinct from SQL identifiers while a caller parses and formats the body.
+func RewriteSQLUdfBodyPreservingArguments(body, sqlMode, targetDatabase string, rewrite func(string) (string, error)) (string, error) {
+	if !strings.Contains(body, "$") {
+		return rewrite(body)
+	}
+	prefix := "__mo_clone_udf_arg_"
+	lowerBody := strings.ToLower(body)
+	lowerDatabase := strings.ToLower(targetDatabase)
+	for i := 0; strings.Contains(lowerBody, prefix) || strings.Contains(lowerDatabase, prefix); i++ {
+		prefix = fmt.Sprintf("__mo_clone_udf_arg_%d_", i)
+	}
+	markers := make(map[string]string)
+	protected := replaceSQLUdfArgMarkers(body, math.MaxInt, sqlMode, func(ordinal int) string {
+		digits := strconv.Itoa(ordinal)
+		name := prefix + digits
+		markers[name] = "$" + digits
+		return "`" + name + "`"
+	})
+	rewritten, err := rewrite(protected)
+	if err != nil || len(markers) == 0 {
+		return rewritten, err
+	}
+	if rewritten == protected {
+		return body, nil
+	}
+	scanner := mysqlparser.NewScannerWithSQLMode(dialect.MYSQL, rewritten, mysqlparser.ParseSQLModeFlags(sqlMode))
+	defer mysqlparser.PutScanner(scanner)
+	var result strings.Builder
+	result.Grow(len(rewritten))
+	written, previousToken := 0, 0
+	for {
+		token, name := scanSQLToken(scanner, &previousToken)
+		if token == 0 || token == mysqlparser.LEX_ERROR {
+			break
+		}
+		if original, ok := markers[name]; token == mysqlparser.QUOTE_ID && ok {
+			// Generated names contain no escapes and the formatter quotes
+			// each one with a single backtick on either side.
+			start := scanner.Pos - len(name) - 2
+			result.WriteString(rewritten[written:start])
+			result.WriteString(original)
+			written = scanner.Pos
+		}
+	}
+	result.WriteString(rewritten[written:])
+	return result.String(), nil
+}
+
+// SQLUdfBodyReferencesPower finds a possible POW call in the executable SQL.
+// The invocation scanner distinguishes quoted identifiers, literal strings,
+// and executable comments. Ambiguous identifier-plus-parenthesis syntax can
+// retain a marker; failing to mark a real call would change its semantics.
+func SQLUdfBodyReferencesPower(body, sqlMode string) bool {
+	if !strings.Contains(strings.ToLower(body), "pow") {
+		return false
+	}
+	scanner := mysqlparser.NewScannerWithSQLMode(dialect.MYSQL, body, mysqlparser.ParseSQLModeFlags(sqlMode))
+	defer mysqlparser.PutScanner(scanner)
+	previousToken := 0
+	powerName := false
+	started := false
+	for {
+		lastToken := previousToken
+		token, name := scanSQLToken(scanner, &previousToken)
+		switch token {
+		case 0, mysqlparser.LEX_ERROR:
+			return false
+		case ';':
+			// The binder consumes only the first nonempty statement.
+			if !started {
+				continue
+			}
+			return false
+		case '(':
+			if powerName {
+				return true
+			}
+		}
+		started = true
+		// WITH [RECURSIVE] introduces a CTE declaration, whose leading
+		// identifier can be followed by a parenthesized column list.
+		powerName = token == mysqlparser.ID && lastToken != '.' && lastToken != mysqlparser.WITH && lastToken != mysqlparser.RECURSIVE &&
+			(strings.EqualFold(name, "pow") || strings.EqualFold(name, "power"))
+	}
 }
 
 // scanSQLToken keeps secondary SQL scans consistent with qualified identifiers.
@@ -8523,8 +8609,22 @@ func bindPreparedFuncExprImplByPlanExpr(
 		// again and preserves direct-marker/domainless provenance separately.
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
+	return rebindFuncExprImplByPlanExpr(
+		ctx, originalBoundExpr.GetF(), name, args, stringDomainModes, originalBoundExpr, true)
+}
+
+func rebindFuncExprImplByPlanExpr(
+	ctx context.Context,
+	original *plan.Function,
+	name string,
+	args []*Expr,
+	stringDomainModes []function.StringDomainCheckMode,
+	originalBoundExpr *Expr,
+	allowInternalFunctionArgs bool,
+) (*Expr, error) {
+	ctx = function.WithBoundPowerBinding(ctx, original.GetFunc().GetObj())
 	return bindFuncExprImplByPlanExpr(
-		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, true)
+		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, allowInternalFunctionArgs)
 }
 
 func bindFuncExprImplByPlanExpr(
@@ -12979,23 +13079,27 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
 	// don't cast 0xXXXX as float64, use the uint64
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		ctx := b.GetContext()
+		if typ.IsEmpty() {
+			return makePlan2DecimalExprWithType(ctx, val)
+		}
+		if function.LegacyPowerForTableDump(ctx) {
+			return appendCastBeforeExpr(ctx, makePlan2ReleasedDecimalSourceExpr(val), typ)
+		}
 		canonical := val
 		var normalizedWidth int32
 		if normalized, width, _, ok := normalizePlainDecimalLiteral(val); ok {
 			canonical = normalized
 			normalizedWidth = width
 		}
-		if !typ.IsEmpty() {
-			source := canonical
-			isDecimalTarget := types.T(typ.Id).IsDecimal()
-			if !isDecimalTarget {
-				source = val
-			}
-			return appendCastBeforeExpr(b.GetContext(),
-				makePlan2DecimalSourceExpr(source,
-					isDecimalTarget && decimalLiteralRequiresV82(val, canonical, normalizedWidth)), typ)
+		source := canonical
+		isDecimalTarget := types.T(typ.Id).IsDecimal()
+		if !isDecimalTarget {
+			source = val
 		}
-		return makePlan2DecimalExprWithType(b.GetContext(), val)
+		return appendCastBeforeExpr(ctx,
+			makePlan2DecimalSourceExpr(source,
+				isDecimalTarget && decimalLiteralRequiresV82(val, canonical, normalizedWidth)), typ)
 	}
 
 	returnRawLiteralExpr := func(val string, form plan.StringLiteralForm) (*Expr, error) {

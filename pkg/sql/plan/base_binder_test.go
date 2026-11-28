@@ -195,6 +195,7 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f, "result should be a function")
 		// "pow" is remapped to "power"
 		require.Equal(t, "power", f.Func.GetObjName())
+		require.Equal(t, function.EncodeOverloadID(149, 1), f.Func.GetObj())
 	})
 
 	t.Run("power with two int args", func(t *testing.T) {
@@ -207,6 +208,7 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		f := result.GetF()
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
+		require.Equal(t, function.EncodeOverloadID(149, 1), f.Func.GetObj())
 	})
 }
 
@@ -736,6 +738,257 @@ func TestSQLIdentityUDFKeepsZeroScalarDependentProgram(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, foundScan, "the identity UDF must retain the authorized table scan")
 	require.GreaterOrEqual(t, programRoot, int32(0))
+}
+
+type powerUdfCompilerContext struct {
+	*MockCompilerContext
+	bodies map[string]function.Udf
+}
+
+func (c *powerUdfCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
+	udf, ok := c.bodies[name]
+	if !ok {
+		return nil, nil
+	}
+	udf.Language = string(tree.SQL)
+	return &udf, nil
+}
+
+func TestSQLUDFBindsPowerInDefinitionScope(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		callerLegacy     bool
+		overloads        []int32
+	}{
+		{"old scalar under current caller", "old_scalar(n_nationkey)", false, []int32{0}},
+		{"old query under current caller", "old_query(n_nationkey)", false, []int32{0}},
+		{"new scalar under old caller", "new_scalar(n_nationkey)", true, []int32{1}},
+		{"new query under old caller", "new_query(n_nationkey)", true, []int32{1}},
+		{"old parenthesized set query", "old_set(10 + n_nationkey)", false, []int32{0}},
+		{"new parenthesized set query", "new_set(10 + n_nationkey)", true, []int32{1}},
+		{"current callee inside old query", "mixed_old(n_nationkey)", false, []int32{0, 1}},
+		{"old callee inside current scalar", "mixed_new(n_nationkey)", true, []int32{0, 1}},
+		{"old argument inside new body", "new_scalar(pow(n_nationkey,0.5))", true, []int32{0, 1}},
+		{"new argument inside old body", "old_query(pow(n_nationkey,0.5))", false, []int32{0, 1}},
+		{"unmarked forwarding routine selects callee mode", "unmarked_forward(n_nationkey)", true, []int32{1}},
+		{"argument inside CASE CAST and child SELECT", "new_wrapped(pow(n_nationkey,0.5))", true, []int32{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &powerUdfCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+				bodies: map[string]function.Udf{
+					"old_scalar":       {Body: "power($1,0.5)", LegacyPower: true},
+					"old_query":        {Body: "select power($1,0.5)", LegacyPower: true},
+					"new_scalar":       {Body: "pow($1,0.5)"},
+					"new_query":        {Body: "SELECT POWER($1,0.5)"},
+					"old_set":          {Body: "(select cast(null as double) where 1=0) union all select pow($1,0.5)", LegacyPower: true},
+					"new_set":          {Body: "(select cast(null as double) where 1=0) union all select pow($1,0.5)"},
+					"unmarked_forward": {Body: "new_scalar($1)", LegacyPower: true},
+					"new_wrapped":      {Body: "SELECT cast(case when $1 > 0 then (select power($1,0.5)) else 0 end as double)"},
+					"mixed_old":        {Body: "select new_scalar($1)+pow($1,0.5)", LegacyPower: true},
+					"mixed_new":        {Body: "old_query($1)+pow($1,0.5)"},
+				},
+			}
+			caller := function.WithPersistedPowerBinding(t.Context(), tc.callerLegacy)
+			ctx.SetContext(caller)
+			stmt, err := parsers.ParseOne(caller, dialect.MYSQL, "select "+tc.expression+" from nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false, nil)
+			require.NoError(t, err)
+			seen := make(map[int32]struct{})
+			require.NoError(t, plan.VisitExpressionsInOwner(built.GetQuery(), func(expr *plan.Expr) error {
+				return plan.VisitExprTree(expr, func(e *plan.Expr) error {
+					if ref := e.GetF().GetFunc(); ref != nil {
+						id, ordinal := function.DecodeOverloadID(ref.Obj)
+						if id == function.POW {
+							seen[ordinal] = struct{}{}
+						}
+					}
+					return nil
+				})
+			}))
+			require.Len(t, seen, len(tc.overloads))
+			for _, ordinal := range tc.overloads {
+				require.Contains(t, seen, ordinal)
+			}
+			require.Same(t, caller, ctx.GetContext())
+		})
+	}
+}
+
+func TestPreparedSQLUDFRetainsBoundPowerSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name, call    string
+		executeLegacy bool
+		overloads     []int32
+		negativeError bool
+		positive      float64
+	}{
+		{"released", "released_pow(?)", false, []int32{0}, true, 4},
+		{"current", "current_pow(?)", true, []int32{1}, false, 4},
+		{"ordinary alias", "POW(?, 0.5)", true, []int32{1}, false, 4},
+		{"legacy wraps current", "released_outer(?)", false, []int32{0, 1}, false, 2},
+		{"current wraps legacy", "current_outer(?)", true, []int32{1, 0}, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			compiler := &powerUdfCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, proc),
+				bodies: map[string]function.Udf{
+					"released_pow":   {Body: "power($1,0.5)", LegacyPower: true},
+					"current_pow":    {Body: "pow($1,0.5)"},
+					"released_outer": {Body: "power(current_pow($1),0.5)", LegacyPower: true},
+					"current_outer":  {Body: "pow(released_pow($1),0.5)"},
+				},
+			}
+			// Prepared SET takes the parameter-fill path at execution even
+			// when a pure SELECT could use its cached compile or rebind its AST.
+			sql := "prepare p from 'set @answer = " + tc.call + "'"
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			prepared, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			preparePlan := prepared.GetDcl().GetPrepare().GetPlan()
+			original := preparePlan.GetDcl().GetSetVariables().Items[0].Value
+
+			checkPower := func(t *testing.T, expr *plan.Expr) {
+				t.Helper()
+				var overloads []int32
+				require.NoError(t, plan.VisitExprTree(expr, func(current *plan.Expr) error {
+					fn := current.GetF()
+					if id, overload := function.DecodeOverloadID(fn.GetFunc().GetObj()); id == function.POW {
+						overloads = append(overloads, overload)
+						require.Equal(t, "power", fn.Func.GetObjName())
+						require.Equal(t, types.T_float64, types.T(current.Typ.Id))
+					}
+					return nil
+				}))
+				require.Equal(t, tc.overloads, overloads)
+			}
+			checkPower(t, original)
+			require.Equal(t, int32(0), findFirstParamPos(original))
+
+			execCtx := function.WithPersistedPowerBinding(t.Context(), tc.executeLegacy)
+			for _, values := range []struct {
+				name  string
+				arg   ParamValue
+				valid bool
+			}{
+				{"negative", sqlIntParam(-4), false},
+				{"positive text", ParamValue{Value: "16", SourceType: types.T_varchar.ToType(), HasSourceType: true}, true},
+				{"negative reused", sqlIntParam(-4), false},
+			} {
+				t.Run(values.name, func(t *testing.T) {
+					filled, err := FillValuesOfParamsInPlan(execCtx, preparePlan, []any{values.arg})
+					require.NoError(t, err)
+					bound := filled.GetDcl().GetSetVariables().Items[0].Value
+					checkPower(t, bound)
+					exec, err := colexec.NewExpressionExecutor(proc, bound)
+					require.NoError(t, err)
+					defer exec.Free()
+					result, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+					if !values.valid && tc.negativeError {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+						return
+					}
+					require.NoError(t, err)
+					got, isNull := vector.GenerateFunctionFixedTypeParameter[float64](result).GetValue(0)
+					require.Equal(t, !values.valid, isNull)
+					if values.valid {
+						require.Equal(t, tc.positive, got)
+					}
+				})
+			}
+			cached := preparePlan.GetDcl().GetSetVariables().Items[0].Value
+			checkPower(t, cached)
+			require.Equal(t, int32(0), findFirstParamPos(cached))
+		})
+	}
+}
+
+func TestSQLUDFBindsTableAndValuesQueryTerms(t *testing.T) {
+	mode := "ANSI_QUOTES"
+	for _, tc := range []struct {
+		name, body string
+		wantScan   bool
+	}{
+		{"table left term", `TABLE "bvt_test2"."t3" UNION ALL SELECT $1 LIMIT 1`, true},
+		{"parenthesized values left term", "(VALUES ROW($1) UNION ALL SELECT 2 WHERE 1=0)", false},
+		{"leading empty query", "; SELECT $1; SELECT 3;", false},
+		{"leading empty set query", "; (SELECT 1 WHERE 1=0) UNION ALL SELECT $1;", false},
+		{"PERFORM projection", "perform select $1", false},
+		{"PERFORM parenthesized set", "; perform (select 1 where 1=0) union all select $1; select 3", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &powerUdfCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				bodies: map[string]function.Udf{
+					"query_term": {Body: tc.body, SQLMode: &mode},
+				},
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"select query_term(cast(? as signed))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, true, nil)
+			require.NoError(t, err)
+
+			query := built.GetQuery()
+			require.NotNil(t, query)
+			var foundScan, foundParam bool
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					require.Equal(t, "bvt_test2", node.TableDef.GetDbName())
+					require.Equal(t, "t3", node.TableDef.GetName())
+					foundScan = true
+				}
+			}
+			require.NoError(t, plan.VisitExpressionsInOwner(query, func(root *plan.Expr) error {
+				return plan.VisitExprTree(root, func(e *plan.Expr) error {
+					if param := e.GetP(); param != nil {
+						require.Equal(t, int32(1), param.Pos)
+						foundParam = true
+					}
+					return nil
+				})
+			}))
+			require.Equal(t, tc.wantScan, foundScan)
+			require.True(t, foundParam, "the query term must retain the caller's prepared argument")
+		})
+	}
+}
+
+func TestBindSQLUDFPerformIdentifiers(t *testing.T) {
+	ctx := &powerUdfCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		bodies: map[string]function.Udf{
+			"bare_column":      {Body: "perform + $1"},
+			"qualified_column": {Body: "perform.perform + $1"},
+		},
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `select bare_column(2), qualified_column(3)
+		from (select n_nationkey as perform from nation) as perform`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, built.GetQuery())
+}
+
+func TestSQLUDFReportsInvalidBody(t *testing.T) {
+	ctx := &powerUdfCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+		bodies: map[string]function.Udf{
+			"incomplete_query": {Body: "(select 1) union all"},
+		},
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select incomplete_query()", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false, nil)
+	require.Error(t, err)
 }
 
 func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {

@@ -96,7 +96,7 @@ func restoredViewCreationContext(ctx CompilerContext, database, name string) (Co
 		db = data.DefaultDatabase
 	}
 	return &viewRegenerationContext{CompilerContext: ctx, defaultDatabase: db,
-		rootSQL: ctx.GetRootSql(), lowerCaseTableNames: lower}, nil
+		rootSQL: ctx.GetRootSql(), lowerCaseTableNames: lower, powerNullOnNonFinite: data.PowerNullOnNonFinite}, nil
 }
 
 func preserveRestoredViewDefinition(ctx context.Context, database, name, generated string) (string, error) {

@@ -25,6 +25,57 @@ type legacyTimestampAddSecondContextKey struct{}
 type legacyDecimalIntegerDivContextKey struct{}
 type legacyUnixTimestampDatetimeContextKey struct{}
 
+type legacyPowerContextKey struct{}
+
+// WithLegacyPowerForTableDump selects the released POW and decimal literal
+// bindings only while verifying an expression's SQL origin in DUMP/LOAD.
+func WithLegacyPowerForTableDump(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyPowerContextKey{}, true)
+}
+
+// LegacyPowerForTableDump reports whether DUMP/LOAD is reconstructing a
+// released POW expression and its numeric literal bindings.
+func LegacyPowerForTableDump(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	legacy, _ := ctx.Value(legacyPowerContextKey{}).(bool)
+	return legacy
+}
+
+type persistedPowerContextKey struct{}
+
+// WithPersistedPowerBinding scopes POW binding to one stored SQL definition.
+func WithPersistedPowerBinding(ctx context.Context, legacy bool) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, persistedPowerContextKey{}, legacy)
+}
+
+// WithBoundPowerBinding preserves the definition's POW semantics when a
+// prepared call is resolved again against its execution-time argument types.
+// Both variants share a signature and still require normal argument coercion.
+func WithBoundPowerBinding(ctx context.Context, boundOverload int64) context.Context {
+	fid, overload := DecodeOverloadID(boundOverload)
+	if fid != POW || (overload != 0 && overload != powerNullOnNonFiniteOverload) {
+		return ctx
+	}
+	legacy := overload == 0
+	if legacyPersistedPowerBinding(ctx) == legacy {
+		return ctx
+	}
+	return WithPersistedPowerBinding(ctx, legacy)
+}
+
+func legacyPersistedPowerBinding(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	legacy, _ := ctx.Value(persistedPowerContextKey{}).(bool)
+	return legacy
+}
+
 // WithLegacyUnixTimestampDatetime reconstructs pre-DATETIME-overload trees
 // only while verifying persisted table expressions during DUMP/LOAD.
 func WithLegacyUnixTimestampDatetime(ctx context.Context) context.Context {

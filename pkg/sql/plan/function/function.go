@@ -697,6 +697,13 @@ func getFunctionByName(
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
+	if r.fid == POW {
+		if LegacyPowerForTableDump(ctx) {
+			check = fixedTypeMatch(f.Overloads[:1], args)
+		} else if legacyPersistedPowerBinding(ctx) && (check.status == succeedMatched || check.status == succeedWithCast) {
+			check.idx = 0
+		}
+	}
 	if legacy, ok := legacyIncompleteTemporalCheck(ctx, r.fid, f.Overloads, args); ok {
 		check = legacy
 	}
@@ -1138,8 +1145,12 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 	// These STRICT functions can synthesize NULL from non-NULL arguments.
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
+	case POW:
+		if oid == powerNullOnNonFiniteOverload {
+			return false
+		}
 	case DIV, INTEGER_DIV, MOD,
-		POW, EXP, COT, DEGREES, ACOSH, ATANH,
+		EXP, COT, DEGREES, ACOSH, ATANH,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
 		INET6_ATON, INET_ATON, INET6_NTOA, ELT, UNHEX, CONV, MAKEDATE,

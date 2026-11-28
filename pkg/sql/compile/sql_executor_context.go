@@ -269,10 +269,11 @@ func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, databas
 	result.ReadRows(func(n int, cols []*vector.Vector) bool {
 		for i := 0; i < n; i++ {
 			udf := &function.Udf{
-				Body: cols[1].GetStringAt(i), Language: cols[2].GetStringAt(i),
-				RetType: cols[3].GetStringAt(i), Db: cols[4].GetStringAt(i),
+				Language: cols[2].GetStringAt(i),
+				RetType:  cols[3].GetStringAt(i), Db: cols[4].GetStringAt(i),
 				ModifiedTime: strings.NewReplacer(" ", "_", ":", "-").Replace(cols[5].GetStringAt(i)),
 			}
+			udf.Body, udf.LegacyPower = function.DecodeUdfCatalogBody(udf.Language, cols[1].GetStringAt(i))
 			mode := cols[6].GetStringAt(i)
 			udf.SQLMode = &mode
 			if decodeErr = json.Unmarshal([]byte(types.DecodeJson(cols[0].GetBytesAt(i)).String()), &udf.Args); decodeErr != nil {

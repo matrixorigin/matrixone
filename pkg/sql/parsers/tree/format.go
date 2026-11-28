@@ -39,6 +39,7 @@ type FmtCtx struct {
 	// as hex-to-varchar casts so the SQL reparses identically with or without
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
+	preserveBinaryHexLiterals     bool
 	viewDefinition                bool
 	paramExprOffset               bool
 	detectDateTimeFormat          bool
@@ -142,6 +143,14 @@ func WithNoBackslashEscape() FmtCtxOption {
 // NoBackslashEscape reports whether string literals should be formatted for the
 // NO_BACKSLASH_ESCAPES sql_mode.
 func (ctx *FmtCtx) NoBackslashEscape() bool { return ctx.noBackslashEscape }
+
+// WithPreserveBinaryHexLiterals retains the binary introducer in executable SQL
+// without converting string literals or changing their escaping rules.
+func WithPreserveBinaryHexLiterals() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.preserveBinaryHexLiterals = true
+	})
+}
 
 func WithModeIndependentStringLiterals() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {

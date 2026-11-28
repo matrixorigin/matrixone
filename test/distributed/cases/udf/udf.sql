@@ -56,3 +56,11 @@ create function udf_marker_collision(p_id int) returns int language sql as 'sele
 select udf_marker_collision(cast(5 as int)) as collision_safe;
 drop function udf_marker_collision(int);
 drop table udf_marker_collision_base;
+
+create function udf_parenthesized_union(a int) returns int language sql as '(select 1 where 1=0) union all select $1';
+select udf_parenthesized_union(2) as union_value;
+drop function udf_parenthesized_union(int);
+
+create function udf_perform_select() returns int language sql as 'perform select 7';
+select udf_perform_select() as perform_value;
+drop function udf_perform_select();

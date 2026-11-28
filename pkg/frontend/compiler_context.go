@@ -1242,6 +1242,9 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 					udf.NullPolicy = revision.NullPolicy
 				}
 			}
+			// Keep revision validation on the catalog bytes. Decode only the
+			// authoritative executable body after selecting the active revision.
+			udf.Body, udf.LegacyPower = function.DecodeUdfCatalogBody(udf.Language, udf.Body)
 			// Known legacy rows contribute their logical signature to overload
 			// ranking. Their body is never eligible for execution.
 			legacyPython := udf.Language == string(tree.PYTHON) && udf.Revision == 0

@@ -188,6 +188,10 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
+	if node.ValType == P_ScoreBinaryHexnum && (ctx.preserveBinaryHexLiterals || ctx.ModeIndependentStringLiterals()) {
+		fmt.Fprintf(ctx, "_binary %s", node.origString)
+		return
+	}
 	if ctx.ModeIndependentStringLiterals() {
 		switch node.ValType {
 		case P_char:
@@ -210,9 +214,6 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 				return
 			}
 			fmt.Fprintf(ctx, "_binary 0x%x", []byte(node.origString))
-			return
-		case P_ScoreBinaryHexnum:
-			fmt.Fprintf(ctx, "_binary %s", node.origString)
 			return
 		}
 	}
@@ -268,7 +269,9 @@ func (s *StrVal) String() string {
 
 func FormatString(str string) string {
 	var buffer strings.Builder
-	for i, ch := range str {
+	// SQL binary strings can contain arbitrary bytes alongside escape sequences.
+	for i := range len(str) {
+		ch := str[i]
 		if ch == '\n' {
 			buffer.WriteString("\\n")
 		} else if ch == '\x00' {
@@ -290,8 +293,7 @@ func FormatString(str string) string {
 		} else if ch == '\t' {
 			buffer.WriteString("\\t")
 		} else {
-			// buffer.WriteByte(byte(ch))
-			buffer.WriteRune(ch)
+			buffer.WriteByte(ch)
 		}
 	}
 	res := buffer.String()

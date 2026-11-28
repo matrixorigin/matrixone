@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -93,6 +95,405 @@ func TestTableDumpExactBaseSpecialIntegerBindings(t *testing.T) {
 			require.ErrorContains(t, err, "cannot verify bound generated expression")
 		})
 	}
+}
+
+func TestTableDumpPowerOverloads(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(a double, b double, constraint ck check (pow(a,b) + power(a,b) > 0))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	powerRefs := func(table *planpb.TableDef) []*planpb.ObjectRef {
+		t.Helper()
+		var refs []*planpb.ObjectRef
+		require.NoError(t, planpb.VisitExprTree(table.Checks[0].Check, func(expr *planpb.Expr) error {
+			if ref := expr.GetF().GetFunc(); ref != nil && ref.ObjName == "power" {
+				refs = append(refs, ref)
+			}
+			return nil
+		}))
+		require.Len(t, refs, 2)
+		return refs
+	}
+	for _, ref := range powerRefs(current) {
+		require.Equal(t, function.EncodeOverloadID(149, 1), ref.Obj)
+	}
+	// Nullable DOUBLE operands let the fixture use the unchanged physical
+	// argument and result descriptors while pinning the released identity.
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	for _, ref := range powerRefs(legacy) {
+		ref.Obj = function.EncodeOverloadID(149, 0)
+	}
+
+	for _, pair := range [][2]*planpb.TableDef{{legacy, legacy}, {current, legacy}, {current, current}} {
+		sensitive, err := AnalyzeTableDumpBindings(compiler, pair[0], pair[1])
+		require.NoError(t, err)
+		require.True(t, sensitive, "the manifest must retain bound expressions")
+	}
+	sensitive, err := AnalyzeTableDumpBindings(compiler, legacy, nil)
+	require.NoError(t, err)
+	require.False(t, sensitive, "an SQL-only manifest can load into the released binding")
+	_, err = AnalyzeTableDumpBindings(compiler, current, nil)
+	require.ErrorContains(t, err, "cannot verify bound check expression")
+
+	mixed := proto.Clone(legacy).(*planpb.TableDef)
+	powerRefs(mixed)[0].Obj = function.EncodeOverloadID(149, 1)
+	_, err = AnalyzeTableDumpBindings(compiler, current, mixed)
+	require.ErrorContains(t, err, "cannot verify bound check expression")
+}
+
+func TestTableDumpReleasedPowerChecks(t *testing.T) {
+	// CheckDef bytes from field 18 of mo_tables.extra_info on the official
+	// v4.2.9 server (6c05e42f9f66). Fresh declarations use the normal binder.
+	for _, tc := range []struct {
+		name, columns string
+		released      string
+	}{
+		{"root", "i int primary key, b double",
+			"0a0a5f5f6d6f5f63686b5f3112d3010a02080a3acc010a0920808080802042013e128f010a02081f3a88010a0e2080808080d0124205706f77657212130a0d081f28ffffffffffffffffff012a02100112610a06081f100128013a570a0d2080808080d002420463617374123a0a0808201001200228013a2e0a0d2080808080d002420463617374120f0a06083d1001200312055a03302e35120c0a0808201001200228015a00120a0a06081f100128015a00122d0a04081f10013a250a0d2080808080d002420463617374120a0a04081710011202280012080a04081f10015a001a13504f574552286062602c20302e3529203e2030"},
+		{"exp", "i int primary key, b double, p double",
+			"0a0a5f5f6d6f5f63686b5f311282010a02080a3a7c0a0920808080802042013e12400a02081f3a3a0a0e2080808080d0124205706f77657212130a0d081f28ffffffffffffffffff012a02100112130a0d081f28ffffffffffffffffff012a021002122d0a04081f10013a250a0d2080808080d002420463617374120a0a04081710011202280012080a04081f10015a001a11504f57286062602c2060706029203e2030"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decode := func(encoded string) *planpb.CheckDef {
+				t.Helper()
+				data, err := hex.DecodeString(encoded)
+				require.NoError(t, err)
+				check := new(planpb.CheckDef)
+				require.NoError(t, check.Unmarshal(data))
+				return check
+			}
+			released := decode(tc.released)
+			compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+			compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table t("+tc.columns+", constraint "+released.Name+" check ("+released.OriginSql+"))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			current := built.GetDdl().GetCreateTable().GetTableDef()
+			current.OriginalName = "original_table_name"
+			legacy := proto.Clone(current).(*planpb.TableDef)
+			legacy.Checks = []*planpb.CheckDef{released}
+
+			sensitive, err := AnalyzeTableDumpBindings(compiler, legacy, nil)
+			require.NoError(t, err)
+			require.False(t, sensitive)
+			_, err = AnalyzeTableDumpBindings(compiler, current, nil)
+			require.ErrorContains(t, err, "cannot verify bound check expression")
+
+			replacement, containsPower, err := RecoverTableDumpV1Bindings(compiler, current)
+			require.NoError(t, err)
+			require.True(t, containsPower)
+			require.NotNil(t, replacement)
+			require.Equal(t, current.OriginalName, replacement.OriginalName)
+			require.True(t, proto.Equal(released, replacement.Checks[0]), "restore the exact published CHECK")
+			require.False(t, proto.Equal(current.Checks[0], replacement.Checks[0]))
+			replacement, containsPower, err = RecoverTableDumpV1Bindings(compiler, legacy)
+			require.NoError(t, err)
+			require.True(t, containsPower)
+			require.Nil(t, replacement, "the original bound CHECK already matches")
+
+			// LOAD can replay either complete bound payload against the same
+			// declaration. Names are part of the shared schema and stay stable.
+			for _, source := range []*planpb.TableDef{legacy, current} {
+				sensitive, err := AnalyzeTableDumpBindings(compiler, source, source)
+				require.NoError(t, err)
+				require.True(t, sensitive)
+				sensitive, err = AnalyzeTableDumpBindings(compiler, current, source)
+				require.NoError(t, err)
+				require.True(t, sensitive)
+			}
+
+			if tc.name == "root" {
+				forged := proto.Clone(legacy).(*planpb.TableDef)
+				pow := forged.Checks[0].Check.GetF().Args[0].GetF()
+				exponent := pow.Args[1].GetF().Args[0]
+				require.EqualValues(t, 2, exponent.Typ.Width)
+				literal := exponent.GetF().Args[0].GetLit()
+				require.Equal(t, "0.5", literal.GetSval())
+				literal.Value = &planpb.Literal_Sval{Sval: "0.6"}
+				_, err = AnalyzeTableDumpBindings(compiler, current, forged)
+				require.ErrorContains(t, err, "cannot verify bound check expression")
+			}
+		})
+	}
+}
+
+func TestRecoverTableDumpV1GeneratedPower(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	build := func(t *testing.T, name, declarations string) *planpb.TableDef {
+		t.Helper()
+		compiler.tables[name] = &planpb.TableDef{Name: name}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table "+name+" ("+declarations+")", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(compiler, stmt, false, nil)
+		require.NoError(t, err)
+		return built.GetDdl().GetCreateTable().GetTableDef()
+	}
+
+	// The bytes are mo_columns.attr_generated from official v4.2.9 for
+	// each CREATE declaration in the release's v1 archives.
+	for _, tc := range []struct {
+		name, declaration string
+		position          int
+		encoded           string
+	}{
+		{"gen_s", "id int primary key, b double, e double, g double generated always as (power(b,e)) stored", 3,
+			"0a750a0d081f28ffffffffffffffffff013a640a0d2080808080d00242046361737412400a02081f3a3a0a0e2080808080d0124205706f77657212130a0d081f28ffffffffffffffffff012a02100112130a0d081f28ffffffffffffffffff012a02100212110a0d081f28ffffffffffffffffff015a00120b706f77657228622c2065291801"},
+		{"gen_m", "id int primary key, b double, g double generated always as (pow(b,0.5)) stored", 2,
+			"0ac6010a0d081f28ffffffffffffffffff013ab4010a0d2080808080d002420463617374128f010a02081f3a88010a0e2080808080d0124205706f77657212130a0d081f28ffffffffffffffffff012a02100112610a06081f100128013a570a0d2080808080d002420463617374123a0a0808201001200228013a2e0a0d2080808080d002420463617374120f0a06083d1001200312055a03302e35120c0a0808201001200228015a00120a0a06081f100128015a0012110a0d081f28ffffffffffffffffff015a00120b706f7728622c20302e35291801"},
+		{"gen_v", "id int primary key, b double, e double, g double generated always as (pow(b,e)) virtual", 3,
+			"0a750a0d081f28ffffffffffffffffff013a640a0d2080808080d00242046361737412400a02081f3a3a0a0e2080808080d0124205706f77657212130a0d081f28ffffffffffffffffff012a02100112130a0d081f28ffffffffffffffffff012a02100212110a0d081f28ffffffffffffffffff015a001209706f7728622c206529"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := hex.DecodeString(tc.encoded)
+			require.NoError(t, err)
+			var released planpb.GeneratedCol
+			require.NoError(t, types.Decode(raw, &released))
+
+			current := tableDumpDDLCatalog(build(t, tc.name, tc.declaration))
+			before := proto.Clone(current)
+			require.Equal(t, tc.name, current.Cols[1].Typ.Table)
+			column := current.Cols[tc.position]
+			require.Equal(t, "g", column.Name)
+			require.Equal(t, released.OriginString, column.GeneratedCol.OriginString)
+			require.Equal(t, released.IsStored, column.GeneratedCol.IsStored)
+			require.False(t, tableDumpHasPower(column.GeneratedCol.Expr, true))
+
+			replacement, containsPower, err := RecoverTableDumpV1Bindings(compiler, current)
+			require.NoError(t, err)
+			require.True(t, containsPower)
+			require.NotNil(t, replacement)
+			got := replacement.Cols[tc.position]
+			require.Equal(t, "g", got.Name)
+			require.True(t, proto.Equal(&released, got.GeneratedCol),
+				"released generated expression differs\nwant: %s\ngot: %s", &released, got.GeneratedCol)
+			require.True(t, proto.Equal(before, current), "proof must leave the catalog definition unchanged")
+			sensitive, err := AnalyzeTableDumpBindings(compiler, current, replacement)
+			require.NoError(t, err)
+			require.True(t, sensitive)
+
+			got.GeneratedCol.Expr = column.GeneratedCol.Expr
+			require.True(t, proto.Equal(current, replacement), "restore changes only the expression")
+		})
+	}
+
+	t.Run("restore generated columns and CHECK together", func(t *testing.T) {
+		current := build(t, "t", "a double, b double, "+
+			"s double generated always as (power(a,0.5)) stored, "+
+			"v double generated always as (pow(a,b)) virtual, "+
+			"ordinary double generated always as (a) stored, "+
+			"constraint ck check (pow(a,b)>0)")
+		current.Cols[2].GeneratedCol.XXX_unrecognized = []byte{0xa0, 0x06, 0x01}
+		before := proto.Clone(current)
+		require.False(t, tableDumpHasPower(current.Cols[2].GeneratedCol.Expr, true))
+		require.False(t, tableDumpHasPower(current.Cols[3].GeneratedCol.Expr, true))
+
+		replacement, containsPower, err := RecoverTableDumpV1Bindings(compiler, current)
+		require.NoError(t, err)
+		require.True(t, containsPower)
+		require.NotNil(t, replacement)
+		require.True(t, proto.Equal(before, current), "the catalog owner must remain unmodified")
+		for _, i := range []int{2, 3} {
+			hasPower := tableDumpHasPower(replacement.Cols[i].GeneratedCol.Expr, true)
+			require.True(t, hasPower, "restore the released binding on generated column %s", current.Cols[i].Name)
+		}
+		require.True(t, replacement.Cols[2].GeneratedCol.IsStored)
+		require.False(t, replacement.Cols[3].GeneratedCol.IsStored)
+		require.True(t, tableDumpHasPower(replacement.Checks[0].Check, true))
+		sensitive, err := AnalyzeTableDumpBindings(compiler, current, replacement)
+		require.NoError(t, err, "the bound-payload verifier accepts the complete restored trees")
+		require.True(t, sensitive)
+		noChange, containsPower, err := RecoverTableDumpV1Bindings(compiler, replacement)
+		require.NoError(t, err)
+		require.True(t, containsPower)
+		require.Nil(t, noChange, "a table with the released bindings already installed needs no replacement")
+
+		forged := proto.Clone(replacement).(*planpb.TableDef)
+		forged.Cols[2].GeneratedCol.OriginString = "power(a, 0.25)"
+		_, err = AnalyzeTableDumpBindings(compiler, current, forged)
+		require.ErrorContains(t, err, "expression declaration does not match target")
+
+		// Restore the original expression fields in the copy before comparing
+		// every remaining bit of the table metadata, including unknown fields.
+		for _, i := range []int{2, 3} {
+			replacement.Cols[i].GeneratedCol.Expr = current.Cols[i].GeneratedCol.Expr
+		}
+		replacement.Checks[0].Check = current.Checks[0].Check
+		require.True(t, proto.Equal(current, replacement), "only the proved expression fields should change")
+	})
+
+	t.Run("reject ambiguous generated expression", func(t *testing.T) {
+		current := build(t, "t", "a decimal(10,2), b decimal(10,2), "+
+			"g double generated always as (power(a/b,0.5)) stored, "+
+			"constraint ck check (pow(a,b)>0)")
+		replacement, containsPower, err := RecoverTableDumpV1Bindings(compiler, current)
+		require.ErrorContains(t, err, "legacy table dump cannot verify persisted expression bindings")
+		require.False(t, containsPower)
+		require.Nil(t, replacement, "a matched CHECK cannot publish a partial replacement")
+	})
+}
+
+func TestRecoverTableDumpV1RejectsOtherSensitiveChecks(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	for _, tc := range []struct {
+		name, declarations string
+	}{
+		{"without POW", "check (a/b>0)"},
+		{"with POW", "constraint pw check (power(a, 0.5)>0), check (a/b>0)"},
+		{"inside POW", "check (power(a/b, 0.5)>0)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table t(a decimal(10,2), b decimal(10,2), "+tc.declarations+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().GetTableDef()
+			replacement, _, err := RecoverTableDumpV1Bindings(compiler, def)
+			require.ErrorContains(t, err, "legacy table dump cannot verify persisted expression bindings")
+			require.Nil(t, replacement)
+		})
+	}
+
+}
+
+func TestRecoverTableDumpV1PowerNotNullInputs(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	ctx.tables["t"] = &planpb.TableDef{Name: "t"}
+	for _, tc := range []struct {
+		name, declaration string
+		get               func(*planpb.TableDef) *planpb.Expr
+	}{
+		{"check", "constraint ck check (power(b,0.5)>0)", func(d *planpb.TableDef) *planpb.Expr { return d.Checks[0].Check }},
+		{"generated", "g double generated always as (power(b,0.5)) stored", func(d *planpb.TableDef) *planpb.Expr { return d.Cols[2].GeneratedCol.Expr }},
+	} {
+		for _, fromCatalog := range []bool{false, true} {
+			name := tc.name + "/CREATE declaration"
+			if fromCatalog {
+				name = tc.name + "/ALTER catalog declaration"
+			}
+			t.Run(name, func(t *testing.T) {
+				sql := "create table t (id int primary key, b double not null, " + tc.declaration + ")"
+				def := tableDumpDDLCreate(t, ctx, sql)
+				catalog := tableDumpDDLCatalog(def)
+				if fromCatalog {
+					catalog = tableDumpDDLCatalogAuthored(t, ctx, catalog, sql)
+				}
+				require.True(t, catalog.Cols[1].Typ.NotNullable)
+				restored, releasedPower, err := RecoverTableDumpV1Bindings(ctx, catalog)
+				require.NoError(t, err)
+				require.True(t, releasedPower)
+				require.NotNil(t, restored)
+				references := tableDumpDDLReferences(t, restored, tc.get(restored), "b")
+				require.NotEmpty(t, references)
+				for _, ref := range references {
+					require.Equal(t, fromCatalog, ref.Typ.NotNullable, "retain the witnessed binding's nullability")
+				}
+				require.True(t, restored.Cols[1].Typ.NotNullable, "the actual NOT NULL declaration still applies")
+				require.False(t, tableDumpHasPower(tc.get(catalog), true))
+				require.True(t, tableDumpHasPower(tc.get(restored), true))
+			})
+		}
+	}
+	t.Run("column-derived nullability can change the bound tree", func(t *testing.T) {
+		const sql = "create table t (b double, n decimal(5,2) not null, constraint ck check (power(b,0.5)>0 and n=1.001))"
+		declared := tableDumpDDLCatalog(tableDumpDDLCreate(t, ctx, sql))
+		catalog := tableDumpDDLCatalogAuthored(t, ctx, declared, sql)
+		require.False(t, sameProjectedBoundExpression(declared.Checks[0].Check, catalog.Checks[0].Check, boundExpressionCatalogColumnScope),
+			"the catalog binding folds the out-of-scale comparison, while CREATE preserves it")
+		for _, target := range []*planpb.TableDef{declared, catalog} {
+			replacement, proved, err := RecoverTableDumpV1Bindings(ctx, target)
+			require.ErrorContains(t, err, "legacy table dump cannot verify persisted expression bindings")
+			require.False(t, proved)
+			require.Nil(t, replacement)
+		}
+	})
+}
+
+func TestTableDumpReleasedPowerDefaults(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	ctx.tables["t"] = &planpb.TableDef{Name: "t"}
+	for _, tc := range []struct {
+		name, expression, encoding string
+	}{
+		{"constant", "power(2,3)", "0a1c0a0f081f100128ffffffffffffffffff011209510000000000002040120d28706f77657228322c203329291801"},
+		{"runtime", "power(rand(),2)", "0a7d0a0f081f100128ffffffffffffffffff013a6a0a0d2080808080d00242046361737412440a04081f10013a3c0a0e2080808080d0124205706f77657212170a04081f10013a0f0a0d2080808080a013420472616e6412110a04081f1001120951000000000000004012130a0f081f100128ffffffffffffffffff015a00121228706f7765722872616e6428292c203229291801"},
+		{"runtime domain", "pow(-2,0.5+0*rand())", "0ae8010a0f081f100128ffffffffffffffffff013ad4010a0d2080808080d00242046361737412ad010a04081f10013aa4010a0e2080808080d0124205706f77657212110a04081f100112095100000000000000c0127f0a0f081f100128ffffffffffffffffff013a6c0a0a2080808080a00142012b121c0a0f081f100128ffffffffffffffffff01120951000000000000e03f12400a04081f10013a380a0a2080808080c00142012a12110a04081f1001120951000000000000000012170a04081f10013a0f0a0d2080808080a013420472616e6412130a0f081f100128ffffffffffffffffff015a00121b28706f77282d322c20302e35202b2030202a2072616e64282929291801"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fresh := tableDumpDDLCatalog(tableDumpDDLCreate(t, ctx,
+				"create table t (id int primary key, g double default ("+tc.expression+"))"))
+			def := fresh.Cols[1].Default
+			encoded, err := hex.DecodeString(tc.encoding)
+			require.NoError(t, err)
+			// These bytes came directly from v4.2.9 mo_columns.att_default.
+			var old planpb.Default
+			require.NoError(t, types.Decode(encoded, &old))
+			require.Equal(t, old.OriginString, def.OriginString)
+			released := proto.Clone(fresh).(*planpb.TableDef)
+			released.Cols[1].Default = &old
+
+			sensitive, err := AnalyzeTableDumpBindings(ctx, released, released)
+			require.NoError(t, err, "DUMP can prove the released DEFAULT against its SQL")
+			require.True(t, sensitive, "current and released bindings require a bound payload")
+			oldPower, err := ProveTableDumpReleasedPower(ctx, fresh, released)
+			require.NoError(t, err, "LOAD verifies the exact released bound payload")
+			require.True(t, oldPower)
+			oldPower, err = ProveTableDumpReleasedPower(ctx, fresh, fresh)
+			require.NoError(t, err)
+			require.False(t, oldPower, "a current bound payload does not prove the released fingerprint")
+			restored, proved, err := RecoverTableDumpV1Bindings(ctx, fresh)
+			require.NoError(t, err)
+			require.True(t, proved)
+			require.NotNil(t, restored)
+			got := restored.Cols[1].Default
+			require.True(t, proto.Equal(&old, got), "want %s\ngot %s", &old, got)
+			require.False(t, tableDumpHasPower(def.Expr, true), "recovery leaves the current target immutable")
+
+			switch tc.name {
+			case "constant":
+				require.Equal(t, float64(8), got.Expr.GetLit().GetDval())
+				forged := proto.Clone(released).(*planpb.TableDef)
+				forged.Cols[1].Default.Expr.GetLit().Value = &planpb.Literal_Dval{Dval: 9}
+				oldPower, err := ProveTableDumpReleasedPower(ctx, fresh, forged)
+				require.ErrorContains(t, err, "cannot verify bound default")
+				require.False(t, oldPower)
+				_, _, err = RecoverTableDumpV1Bindings(ctx, forged)
+				require.ErrorContains(t, err, "cannot verify bound default")
+			case "runtime":
+				require.Nil(t, got.Expr.GetLit(), "RAND must be evaluated separately for each row")
+				require.True(t, tableDumpHasPower(got.Expr, true))
+			case "runtime domain":
+				vec, free, err := colexec.GetReadonlyResultFromExpression(ctx.GetProcess(), def.Expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				defer free()
+				require.True(t, vec.GetNulls().Contains(0), "the current runtime default has row-local NULL")
+				_, _, err = colexec.GetReadonlyResultFromExpression(ctx.GetProcess(), got.Expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+			}
+		})
+	}
+
+	t.Run("constant domain error cannot be a released default", func(t *testing.T) {
+		def := tableDumpDDLCatalog(tableDumpDDLCreate(t, ctx,
+			"create table t (g double default (pow(-2,0.5)))"))
+		require.True(t, def.Cols[0].Default.Expr.GetLit().GetIsnull())
+		sensitive, err := AnalyzeTableDumpBindings(ctx, def, def)
+		require.NoError(t, err)
+		require.True(t, sensitive)
+		_, _, err = RecoverTableDumpV1Bindings(ctx, def)
+		require.ErrorContains(t, err, "cannot verify bound default")
+	})
 }
 
 func TestTableDumpLegacyTimeWidthCompatibility(t *testing.T) {

@@ -213,6 +213,10 @@ func tableDumpHasBoundExpressions(def *plan.TableDef) bool {
 // transplanting bound expressions. A table created from the same SQL under a
 // different session value has matching declarations but different bindings.
 func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest string) (*plan.TableDef, bool, error) {
+	return tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil, false)
+}
+
+func tableDumpRestoredExpressionsWithCheckAliases(target *plan.TableDef, payload []byte, digest string, checkAliases map[string]string, releasedBindings bool) (*plan.TableDef, bool, error) {
 	if target == nil || len(payload) == 0 || len(payload) > tableDumpMaxManifest/2 {
 		return nil, false, moerr.NewInvalidInputNoCtx("invalid table dump expression metadata")
 	}
@@ -231,6 +235,7 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 		!tableDumpHasBoundExpressions(&bound) {
 		return nil, false, moerr.NewInvalidInputNoCtxf("table dump expressions do not match target schema: cols %d/%d checks %d/%d", len(bound.Cols), len(target.Cols), len(bound.Checks), len(target.Checks))
 	}
+	releasedCompositePK := releasedBindings && tableDumpNativeCompositePK(target)
 	replacement := sqlplan.DeepCopyTableDef(target, true)
 	changed := false
 	sourceByName := make(map[string]*plan.ColDef, len(bound.Cols))
@@ -249,11 +254,21 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 			return nil, false, moerr.NewInvalidInputNoCtx("target table contains a nil column")
 		}
 		source := sourceByName[strings.ToLower(dest.Name)]
-		if source == nil || !strings.EqualFold(source.Name, dest.Name) ||
-			source.Hidden != dest.Hidden || !sameTableDumpValueType(source.Typ, dest.Typ) {
+		if source == nil || !strings.EqualFold(source.Name, dest.Name) || source.Hidden != dest.Hidden {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump column does not match target schema")
 		}
-		if !sameTableDumpDefaultDeclaration(source.Default, dest.Default) {
+		sourceType := source.Typ
+		if releasedCompositePK && dest.Name == catalog.CPrimaryKeyColName && dest.Hidden &&
+			tableDumpPackedVarchar(sourceType) && tableDumpPackedVarchar(dest.Typ) {
+			// Only the derived packed carrier's tag differs. Keep all
+			// other type attributes and the target's catalog metadata.
+			sourceType.Charset = dest.Typ.Charset
+		}
+		if !sameTableDumpValueType(sourceType, dest.Typ) {
+			return nil, false, moerr.NewInvalidInputNoCtx("table dump column does not match target schema")
+		}
+		sameDefault := sameTableDumpDefaultDeclaration(source.Default, dest.Default)
+		if !sameDefault && (!releasedBindings || !sameTableDumpNullDefault(source, dest)) {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump default does not match target schema")
 		}
 		if !sameTableDumpOnUpdateDeclaration(source.OnUpdate, dest.OnUpdate) {
@@ -262,7 +277,7 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 		if !sameTableDumpGeneratedDeclaration(source.GeneratedCol, dest.GeneratedCol) {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump generated expression does not match target schema")
 		}
-		if source.Default != nil {
+		if source.Default != nil && sameDefault {
 			changed = changed || !proto.Equal(source.Default, dest.Default)
 			replacement.Cols[i].Default = source.Default
 		}
@@ -290,11 +305,15 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 		if dest == nil {
 			return nil, false, moerr.NewInvalidInputNoCtx("target table contains a nil check")
 		}
-		source := sourceChecks[strings.ToLower(dest.Name)]
-		if source == nil || !strings.EqualFold(source.Name, dest.Name) ||
-			source.OriginSql != dest.OriginSql {
+		key := strings.ToLower(dest.Name)
+		if alias := checkAliases[key]; alias != "" {
+			key = alias
+		}
+		source := sourceChecks[key]
+		if source == nil || source.OriginSql != dest.OriginSql {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump checks do not match target schema")
 		}
+		delete(sourceChecks, key)
 		changed = changed || !proto.Equal(source.Check, dest.Check)
 		replacement.Checks[i].Check = source.Check
 	}
@@ -307,6 +326,39 @@ func sameTableDumpValueType(a, b plan.Type) bool {
 	return a.Id == b.Id && a.Width == b.Width && a.Scale == b.Scale &&
 		a.AutoIncr == b.AutoIncr && a.Enumvalues == b.Enumvalues &&
 		a.SameCollation(b) && a.PadSpace == b.PadSpace
+}
+
+func tableDumpDirectNullDefault(col *plan.ColDef) bool {
+	def := col.Default
+	if def == nil || !def.NullAbility || !strings.EqualFold(def.OriginString, "null") {
+		return false
+	}
+	expr := def.Expr
+	literal := expr.GetLit()
+	if literal == nil {
+		return false
+	}
+	// A bare NULL is typed by assignment to the declared column. Catalog
+	// lineage may be absent from the literal and NULL is always nullable.
+	typ := col.Typ
+	if expr.Typ.Table == "" {
+		typ.Table = ""
+	}
+	typ.NotNullable = false
+	expected := &plan.Expr{Typ: typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	// A forced assignment cast can mark the folded NULL as computed.
+	if literal.StringSource == uint32(types.StringSourceExpression)+1 {
+		expected.GetLit().StringSource = literal.StringSource
+	}
+	return proto.Equal(expr, expected)
+}
+
+func sameTableDumpNullDefault(source, target *plan.ColDef) bool {
+	isImplicit := func(def *plan.Default) bool {
+		return def != nil && def.NullAbility && def.Expr == nil && def.OriginString == ""
+	}
+	return isImplicit(source.Default) && tableDumpDirectNullDefault(target) ||
+		isImplicit(target.Default) && tableDumpDirectNullDefault(source)
 }
 
 func sameTableDumpDefaultDeclaration(a, b *plan.Default) bool {

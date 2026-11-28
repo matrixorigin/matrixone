@@ -381,6 +381,8 @@ type ViewData struct {
 	SecurityType        string           `json:"security_type,omitempty"`
 	LowerCaseTableNames *int64           `json:"lower_case_table_names,omitempty"`
 	Dependencies        []ViewDependency `json:"dependencies,omitempty"`
+	// Views without this marker retain the released POW error behavior.
+	PowerNullOnNonFinite bool `json:"power_null_on_non_finite,omitempty"`
 	// RequiredProtocolVersion records the minimum protocol needed to bind the
 	// persisted view expression on a local CN. It is a defense-in-depth marker;
 	// cluster admission remains the authoritative old-CN re-entry fence.

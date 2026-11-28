@@ -12808,9 +12808,10 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		}
 	}
 
+	sqlMode := sessionSQLModeForParser(ses)
 	var body string
 	if !isPython {
-		body = cf.Body
+		body = encodeSQLUdfDefinitionBody(cf.Body, sqlMode)
 	} else {
 		if cf.Import {
 			return moerr.NewNotSupportedNoCtx("Python artifact import requires the immutable artifact catalog")
@@ -12887,7 +12888,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		retType:  retTypeStr,
 		body:     body,
 		lang:     cf.Language,
-		sqlMode:  sessionSQLModeForParser(ses),
+		sqlMode:  sqlMode,
 		dbName:   dbName,
 	}
 
@@ -12958,6 +12959,15 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	return persistUserDefinedFunction(
 		execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, nil,
 	)
+}
+
+// Store definition metadata only when the body binds POW itself. Calls to
+// other SQL functions are bound with the callee's own persisted policy.
+func encodeSQLUdfDefinitionBody(body, sqlMode string) string {
+	if plan2.SQLUdfBodyReferencesPower(body, sqlMode) {
+		return function.EncodeSQLUdfBody(body)
+	}
+	return body
 }
 
 func escapeSQLStringForDoubleQuotes(s string) string {

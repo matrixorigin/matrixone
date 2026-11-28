@@ -661,7 +661,7 @@ func TestPersistSQLCreatePublishesSharedRevisionWhenCatalogIsReady(t *testing.T)
 		args:     `[{"name":"value","type":"bigint"}]`,
 		argTypes: `["bigint"]`,
 		retType:  "bigint",
-		body:     "select value + 1",
+		body:     encodeSQLUdfDefinitionBody("select power($1,0.5)", ""),
 		lang:     string(tree.SQL),
 		dbName:   "db1",
 	}
@@ -676,7 +676,13 @@ func TestPersistSQLCreatePublishesSharedRevisionWhenCatalogIsReady(t *testing.T)
 	require.Equal(t, findSQL, bh.executedSqls[3])
 	require.Contains(t, bh.executedSqls[4], "insert into mo_catalog.mo_function_revisions")
 	require.Contains(t, bh.executedSqls[4], `"sql_revision"`)
-	require.Contains(t, bh.executedSqls[4], `"select value + 1"`)
+	expectedBody := function.EncodeSQLUdfBody("select power($1,0.5)")
+	require.Equal(t, expectedBody, definition.body)
+	require.Contains(t, bh.executedSqls[2], `"`+escapeSQLStringForDoubleQuotes(expectedBody)+`"`)
+	require.Contains(t, bh.executedSqls[4], `"`+escapeSQLStringForDoubleQuotes(expectedBody)+`"`)
+	fingerprint, err := function.SQLRoutineFingerprint(expectedBody, definition.argTypes, definition.retType)
+	require.NoError(t, err)
+	require.Contains(t, bh.executedSqls[4], `"`+fingerprint+`"`)
 	require.Contains(t, bh.executedSqls[5], "active_revision = 1, namespace_version = 1")
 }
 

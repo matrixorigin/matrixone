@@ -228,6 +228,8 @@ func TestResolveUdfBindsExactPythonRevisionAndNamespace(t *testing.T) {
 	require.Equal(t, uint64(1), resolved.NamespaceVersion)
 	require.Equal(t, uint64(88), resolved.DatabaseID)
 	require.NotEmpty(t, resolved.NamespaceFingerprint)
+	require.Equal(t, body, resolved.Body)
+	require.False(t, resolved.LegacyPower)
 	require.Equal(t, []types.Type{types.T_int64.ToType()}, resolved.ArgsType)
 	require.Contains(t, background.executedSqls, candidateSQL)
 	require.Contains(t, background.executedSqls, pythonRevisionCatalogSQL(nil, 44))
@@ -262,6 +264,71 @@ func TestResolveUdfKeepsLegacySQLRoutineReadableWithoutRevisionCatalog(t *testin
 	require.Zero(t, resolved.Revision, "a legacy SQL definition stays on its existing body while the shared revision table is absent")
 	require.Equal(t, []types.Type{types.T_int64.ToType()}, resolved.ArgsType)
 	require.Contains(t, background.executedSqls, "select active_revision, namespace_version, security_type from mo_catalog.mo_user_defined_function where function_id = 52;")
+}
+
+func TestResolveUdfDecodesActiveSQLPowerRevision(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 0)
+	ses := &Session{feSessionImpl: feSessionImpl{}}
+	ses.SetAccountId(0)
+	background := &backgroundExecTestWithHistory{}
+	background.init()
+	previousNewBackgroundExec := NewBackgroundExec
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		return background
+	}
+	t.Cleanup(func() { NewBackgroundExec = previousNewBackgroundExec })
+
+	const (
+		functionID = int64(52)
+		args       = `[{"name":"value","type":"double"}]`
+		argTypes   = `["double"]`
+		sql        = "power($1,0.5)"
+		retType    = "double"
+	)
+	compiler := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+	compiler.SetDatabase("app")
+	_, candidateSQL := udfCatalogLookup(ctx, nil, "f", "app")
+	headSQL := fmt.Sprintf("select active_revision, namespace_version, security_type from mo_catalog.mo_user_defined_function where function_id = %d;", functionID)
+	background.sql2result[headSQL] = resolveUdfCatalogResult(
+		[]string{"active_revision", "namespace_version", "security_type"}, []interface{}{int64(1), int64(1), "DEFINER"},
+	)
+	revisionSQL := fmt.Sprintf("select revision, args, arg_types, body, rettype, language, definition_schema_version, definition_fingerprint, volatility, null_policy, security_type from mo_catalog.mo_function_revisions where function_id = %d and revision = 1 and namespace_version = 1;", functionID)
+	background.sql2result["select dat_id from mo_catalog.mo_database where datname = 'app' and account_id = 0;"] = singleInt64Result("dat_id", 88)
+	background.sql2result[routineNamespacesSQL([]uint64{uint64(functionID)}, nil)] = namespaceRows(namespaceMember(uint64(functionID), "candidate-state"))
+
+	for _, tc := range []struct {
+		name, baseBody, revisionBody string
+		legacy                       bool
+	}{
+		{"released revision", function.EncodeSQLUdfBody(sql), sql, true},
+		{"current revision", sql, function.EncodeSQLUdfBody(sql), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			background.sql2result[candidateSQL] = resolveUdfCatalogResult(
+				[]string{"function_id", "args", "body", "language", "rettype", "db", "modified_time", "sql_mode"},
+				[]interface{}{functionID, args, tc.baseBody, "sql", retType, "app", "2026-09-20 00:00:00", "ANSI_QUOTES"},
+			)
+			fingerprint, err := function.SQLRoutineFingerprint(tc.revisionBody, argTypes, retType)
+			require.NoError(t, err)
+			background.sql2result[revisionSQL] = resolveUdfCatalogResult(
+				[]string{"revision", "args", "arg_types", "body", "rettype", "language", "definition_schema_version", "definition_fingerprint", "volatility", "null_policy", "security_type"},
+				[]interface{}{int64(1), args, argTypes, tc.revisionBody, retType, "sql", int64(udf.SQLDefinitionSchemaVersion), fingerprint, "VOLATILE", udf.NullCallHandler, "DEFINER"},
+			)
+			argType := types.T_float64.ToType()
+			resolved, err := compiler.ResolveUdf("f", []*pbplan.Expr{{Typ: plan2.MakePlan2Type(&argType)}})
+			require.NoError(t, err)
+			require.Equal(t, functionID, resolved.FunctionID)
+			require.Equal(t, uint64(1), resolved.Revision)
+			require.Equal(t, sql, resolved.Body)
+			require.Equal(t, tc.legacy, resolved.LegacyPower)
+			require.Equal(t, fingerprint, resolved.DefinitionFingerprint)
+			require.NotNil(t, resolved.SQLMode)
+			require.Equal(t, "ANSI_QUOTES", *resolved.SQLMode)
+			call, err := resolved.GetRoutineCall()
+			require.NoError(t, err)
+			require.Equal(t, []byte(fingerprint), call.GetSql().DefinitionFingerprint)
+		})
+	}
 }
 
 func resolveUdfCatalogResult(columns []string, row []interface{}) *MysqlResultSet {

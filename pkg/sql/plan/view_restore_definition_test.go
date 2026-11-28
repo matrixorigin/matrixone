@@ -17,9 +17,15 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,4 +229,120 @@ func TestBuildCreateViewPreservesRestoredDefinition(t *testing.T) {
 			}
 		})
 	}
+}
+
+type viewPowerContextRecorder struct {
+	*MockCompilerContext
+	contexts []context.Context
+}
+
+func (c *viewPowerContextRecorder) SetContext(ctx context.Context) {
+	c.contexts = append(c.contexts, ctx)
+	c.MockCompilerContext.SetContext(ctx)
+}
+
+func TestStoredViewPowerBinding(t *testing.T) {
+	compiler := &viewPowerContextRecorder{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
+	compiler.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+	compiler.tables["nation"].Cols[0].Typ.NotNullable = true
+	previous := t.Context()
+	compiler.SetContext(previous)
+	build := func(sql string) *Plan {
+		t.Helper()
+		statements, err := mysql.Parse(compiler.GetContext(), sql, 1)
+		require.NoError(t, err)
+		defer statements[0].Free()
+		p, err := BuildPlan(compiler, statements[0], false, nil)
+		require.NoError(t, err)
+		return p
+	}
+	store := func(name, sql string, def *TableDef, current bool) {
+		t.Helper()
+		definition, err := json.Marshal(ViewData{Stmt: sql, DefaultDatabase: "tpch", PowerNullOnNonFinite: current})
+		require.NoError(t, err)
+		def.Name, def.TableType, def.TblId = name, catalog.SystemViewRel, uint64(9000+len(compiler.tables))
+		def.ViewSql.View = string(definition)
+		compiler.tables[name] = def
+		compiler.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(def.TblId)}
+	}
+	checkScope := func(t *testing.T, before int, caller context.Context, stored bool, overload int32) {
+		t.Helper()
+		transitions := compiler.contexts[before:]
+		require.Len(t, transitions, 2, "publish and restore one binding context")
+		require.Equal(t, stored, defines.IsPersistentViewBinding(transitions[0]))
+		require.Same(t, caller, transitions[1])
+		float := types.T_float64.ToType()
+		resolved, err := function.GetFunctionByName(transitions[0], "power", []types.Type{float, float})
+		require.NoError(t, err)
+		require.Equal(t, function.EncodeOverloadID(function.POW, overload), resolved.GetEncodedOverloadID())
+	}
+	const oldSQL = "create view old_v as select power(n_nationkey, 0.5) as x from nation"
+	const newSQL = "create view new_v as select pow(n_nationkey, 0.5) as x from nation"
+	const legacy = `{"DefaultDatabase":"tpch"}`
+	restoreContext := WithRestoredViewDefinition(previous, "tpch", "old_v", legacy, oldSQL)
+	compiler.SetContext(restoreContext)
+	before := len(compiler.contexts)
+	oldView := build(oldSQL).GetDdl().GetCreateView().TableDef
+	checkScope(t, before, restoreContext, false, 0)
+	require.True(t, oldView.Cols[0].Typ.NotNullable, "restore inference uses the released semantics")
+	require.NotContains(t, oldView.ViewSql.View, "power_null_on_non_finite")
+	compiler.SetContext(previous)
+	newView := build(newSQL).GetDdl().GetCreateView().TableDef
+	require.False(t, newView.Cols[0].Typ.NotNullable)
+	require.Contains(t, newView.ViewSql.View, `"power_null_on_non_finite":true`)
+	store("old_v", oldSQL, oldView, false)
+	store("new_v", newSQL, newView, true)
+
+	for _, name := range []string{"old_v", "new_v"} {
+		t.Run("regenerate/"+name, func(t *testing.T) {
+			before := len(compiler.contexts)
+			def, err := RegenerateViewDefinition(compiler, compiler.tables[name].ViewSql.View)
+			require.NoError(t, err)
+			require.Equal(t, name == "old_v", def.TableDef.Cols[0].Typ.NotNullable)
+			require.Equal(t, name == "old_v", !strings.Contains(def.TableDef.ViewSql.View, "power_null_on_non_finite"))
+			overload := int32(1)
+			if name == "old_v" {
+				overload = 0
+			}
+			checkScope(t, before, previous, true, overload)
+			require.Same(t, previous, compiler.GetContext())
+		})
+	}
+
+	t.Run("restore caller after binding failure", func(t *testing.T) {
+		before := len(compiler.contexts)
+		_, err := DescribeViewColumns(compiler,
+			`{"Stmt":"create view invalid_v as select pow(missing_column, 0.5) from nation","DefaultDatabase":"tpch"}`)
+		require.ErrorContains(t, err, "missing_column")
+		checkScope(t, before, previous, true, 0)
+		require.Same(t, previous, compiler.GetContext())
+	})
+
+	const nestedSQL = "create view outer_v as select pow(x, 0.5) as x from new_v"
+	nested := build(nestedSQL).GetDdl().GetCreateView().TableDef
+	store("outer_v", nestedSQL, nested, false)
+	for _, query := range []string{
+		"select power(x, 0.5) from old_v",
+		"select x from outer_v",
+	} {
+		seen := map[int32]bool{}
+		for _, node := range build(query).GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				require.NoError(t, planpb.VisitExprTree(expr, func(expr *Expr) error {
+					if ref := expr.GetF().GetFunc(); ref != nil {
+						fid, overload := function.DecodeOverloadID(ref.Obj)
+						if fid == function.POW {
+							seen[overload] = true
+						}
+					}
+					return nil
+				}))
+			}
+		}
+		require.Equal(t, map[int32]bool{0: true, 1: true}, seen, query)
+		require.Same(t, previous, compiler.GetContext())
+	}
+	altered := build("alter view old_v as select pow(n_nationkey, 0.5) as x from nation").GetDdl().GetAlterView().TableDef
+	require.False(t, altered.Cols[0].Typ.NotNullable)
+	require.Contains(t, altered.ViewSql.View, `"power_null_on_non_finite":true`)
 }

@@ -2166,7 +2166,14 @@ func constantFoldWithPreparedExactSource(
 			},
 		}, nil
 	}
-	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(expr, proc))
+	source := rule.ExprStringSource(expr, proc)
+	if function.LegacyPowerForTableDump(proc.Ctx) {
+		// The released DEFAULT folder did not annotate computed scalar
+		// literals with string-source provenance. Reproduce that encoding
+		// when proving its POW binding, leaving current folding unchanged.
+		source = types.StringSourceLiteral
+	}
+	c := rule.GetConstantValue(vec, false, 0, source)
 	if c == nil {
 		constant, err := rule.MaterializeDecimal256Constant(proc, expr, vec)
 		if err != nil {

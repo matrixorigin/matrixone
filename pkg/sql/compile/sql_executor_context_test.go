@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,6 +46,7 @@ import (
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
@@ -419,6 +421,70 @@ func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
 	require.Same(t, child.GetContext(), child.GetProcess().Ctx)
 	require.Same(t, original, proc.GetTopContext())
 	require.Nil(t, parent.GetQueryingSubscription())
+}
+
+func TestInternalExecutorViewUdfCatalogBody(t *testing.T) {
+	const (
+		database = "app"
+		name     = "f"
+		body     = `select power($1,0.5) from "app"."source"`
+		sqlMode  = "ANSI_QUOTES"
+	)
+	for _, tc := range []struct {
+		name, language, storedBody, decodedBody string
+		legacy                                  bool
+	}{
+		{name: "marked SQL", language: "sql", storedBody: function.EncodeSQLUdfBody(body), decodedBody: body},
+		{name: "unmarked SQL", language: "sql", storedBody: body, decodedBody: body, legacy: true},
+		{
+			name: "opaque Python", language: "python",
+			storedBody:  `{"handler":"f","import":false,"body":"def f(x): return x"}`,
+			decodedBody: `{"handler":"f","import":false,"body":"def f(x): return x"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ctx := defines.AttachAccountId(proc.GetTopContext(), 0)
+			proc.ReplaceTopCtx(ctx)
+			proc.Ctx = ctx
+			exec := executor.NewMemExecutor(func(query string) (executor.Result, error) {
+				require.Contains(t, query, "from mo_catalog.mo_user_defined_function where name = 'f' and db = 'app'")
+				result := executor.NewMemResult([]types.Type{
+					types.T_json.ToType(), types.T_text.ToType(), types.T_varchar.ToType(),
+					types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+				}, proc.Mp())
+				result.NewBatchWithRowCount(1)
+				args, err := types.ParseStringToByteJson(`[{"name":"x","type":"double"}]`)
+				require.NoError(t, err)
+				rawArgs, err := args.Marshal()
+				require.NoError(t, err)
+				require.NoError(t, executor.AppendBytesRows(result, 0, [][]byte{rawArgs}))
+				for i, value := range []string{tc.storedBody, tc.language, "double", database, "2026-11-27 10:00:00", sqlMode} {
+					require.NoError(t, executor.AppendStringRows(result, i+1, []string{value}))
+				}
+				return result.GetResult(), nil
+			})
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+				}
+			})
+
+			compiler := &compilerContext{proc: proc, ctx: ctx, viewChild: true}
+			udf, err := compiler.ResolveViewUdf(name, []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_float64)}}}, database)
+			require.NoError(t, err)
+			require.Equal(t, tc.decodedBody, udf.Body)
+			require.Equal(t, tc.legacy, udf.LegacyPower)
+			require.Equal(t, tc.language, udf.Language)
+			require.NotNil(t, udf.SQLMode)
+			require.Equal(t, sqlMode, *udf.SQLMode)
+		})
+	}
 }
 
 func TestInternalExecutorSubscriptionViewWithoutFrontendDelegate(t *testing.T) {

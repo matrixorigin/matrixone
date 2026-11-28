@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1879,6 +1881,925 @@ func TestTableDumpBoundPayloadFieldAndCheckLimits(t *testing.T) {
 	require.NoError(t, preflightTableDumpBoundPayload(wrap()))
 	column = protowire.AppendVarint(protowire.AppendTag(column, 1, protowire.VarintType), 0)
 	require.ErrorContains(t, preflightTableDumpBoundPayload(wrap()), "too many fields")
+}
+
+func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
+	column := func(name string, typ types.T, nullable bool) *plan.ColDef {
+		return &plan.ColDef{Name: name, Typ: plan.Type{Id: int32(typ), NotNullable: !nullable},
+			Default: &plan.Default{NullAbility: nullable}}
+	}
+	for _, tc := range []struct {
+		name, sql, checkName, origin, hash string
+		exponentColumn, dateColumn         bool
+	}{
+		{"fp", "create table fp (id int primary key, b double, p double, constraint ck_pow check (pow(b,p)>0))",
+			"ck_pow", "pow(`b`, `p`) > 0", "a9121361cef78612eb171598e9ec72ebfc423b899c696f06254512980499d92a", true, false},
+		{"mp", "create table mp (id int primary key, b double, check (power(b,0.5)>0))",
+			"mp_chk_1", "power(`b`, 0.5) > 0", "9dac0a8d3fbcc08e0a42eb070a4e9e71fef211047905d27009c01ff842c06a31", false, false},
+		{"stamp", "create table stamp (id int primary key, b double, d date, constraint ck check (power(b,0.5)>0))",
+			"ck", "power(`b`, 0.5) > 0", "9242b7a90403698b8361dc5e262423f492ffe839d4025a293ad3aaeb6e2b0b7a", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The hashes came from official v4.2.9 full and metadata-only archives.
+			// CHECK origins retain the function spelling authored in CREATE.
+			id := column("id", types.T_int32, false)
+			id.Primary = true
+			def := &plan.TableDef{Name: tc.name, Createsql: tc.sql,
+				DefaultCharset: uint32(types.CharsetUTF8),
+				Cols:           []*plan.ColDef{id, column("b", types.T_float64, true)},
+				Pkey:           &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Checks:         []*plan.CheckDef{{Name: tc.checkName, OriginSql: tc.origin}}}
+			if tc.exponentColumn {
+				def.Cols = append(def.Cols, column("p", types.T_float64, true))
+			}
+			if tc.dateColumn {
+				def.Cols = append(def.Cols, column("d", types.T_date, true))
+			}
+			manifest := &tableDumpManifest{Version: 1, SourceTable: tc.name, CreateSQL: tc.sql, SchemaHash: tc.hash}
+			normal, err := tableSchemaHash(def)
+			require.NoError(t, err)
+			require.NotEqual(t, tc.hash, normal)
+			hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), def, manifest, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.hash, hash)
+			require.Equal(t, tc.checkName, def.Checks[0].Name)
+			require.Equal(t, uint32(types.CharsetUTF8), def.DefaultCharset)
+
+			for name, change := range map[string]func(*plan.TableDef){
+				"changed check": func(def *plan.TableDef) {
+					def.Checks[0].OriginSql = strings.Replace(def.Checks[0].OriginSql, "> ", ">= ", 1)
+				},
+				"changed type":            func(def *plan.TableDef) { def.Cols[1].Typ.Id = int32(types.T_float32) },
+				"missing column metadata": func(def *plan.TableDef) { def.Cols[0].Default = nil },
+				"missing CHECK declaration": func(def *plan.TableDef) {
+					def.Createsql = "create table " + def.Name + " (id int primary key, b double)"
+				},
+				"missing CHECK metadata": func(def *plan.TableDef) { def.Checks[0] = nil },
+				"explicit collation": func(def *plan.TableDef) {
+					def.Createsql += " COLLATE=utf8mb4_general_ci"
+				},
+				"character column": func(def *plan.TableDef) {
+					def.Cols = append(def.Cols, column("label", types.T_varchar, true))
+				},
+				"explicit check name": func(def *plan.TableDef) {
+					def.Createsql = strings.Replace(def.Createsql, "constraint ck_pow ", "", 1)
+					def.Createsql = strings.Replace(def.Createsql, "check (", "constraint user_name check (", 1)
+					def.Checks[0].Name = "user_name"
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					changed := proto.Clone(def).(*plan.TableDef)
+					change(changed)
+					hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), changed, manifest, nil)
+					require.NoError(t, err)
+					require.NotEqual(t, tc.hash, hash)
+				})
+			}
+		})
+	}
+}
+
+func TestTableDumpReleasedPowerBoundMainFingerprint(t *testing.T) {
+	// The bound re-dump of v4.2.9 defconst keeps the released DDL hash in
+	// the header and in both main relation fields.
+	const sql = "create table defconst (id int primary key,g double default (power(2,3)))"
+	const releasedHash = "86da098f1e929c4b5d09358fc0af8fe58e72ebba8910de47057724d81d520eac"
+	def := &plan.TableDef{
+		Name: "defconst", Createsql: sql, DefaultCharset: uint32(types.CharsetUTF8),
+		Cols: []*plan.ColDef{
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Default: &plan.Default{}},
+			{Name: "g", Typ: plan.Type{Id: int32(types.T_float64), Scale: -1},
+				Default: &plan.Default{NullAbility: true, OriginString: "(power(2, 3))",
+					Expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 8}}}}}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	manifest := tableDumpManifest{
+		Version: tableDumpBoundFormatVersion, SourceTable: def.Name, CreateSQL: sql, SchemaHash: releasedHash,
+		Relations: []tableDumpRelation{{Role: "main", SourceTable: def.Name, SchemaHash: releasedHash, LogicalSchemaHash: releasedHash}},
+	}
+	normal, err := tableSchemaHash(def)
+	require.NoError(t, err)
+	require.NotEqual(t, releasedHash, normal)
+	candidate, err := tableDumpReleasedPowerMainHash(t.Context(), def, &manifest, nil)
+	require.NoError(t, err)
+	require.Equal(t, releasedHash, candidate)
+	for _, tc := range []struct {
+		name string
+		edit func(*tableDumpManifest, *plan.TableDef)
+	}{
+		{"different header", func(m *tableDumpManifest, _ *plan.TableDef) { m.SchemaHash = normal }},
+		{"different main relation", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].SourceTable = "other" }},
+		{"different relation fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].SchemaHash = normal }},
+		{"different logical fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].LogicalSchemaHash = normal }},
+		{"missing logical fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].LogicalSchemaHash = "" }},
+		{"explicit source collation", func(m *tableDumpManifest, _ *plan.TableDef) { m.CreateSQL += " COLLATE utf8mb4_general_ci" }},
+		{"explicit target collation", func(_ *tableDumpManifest, d *plan.TableDef) { d.Createsql += " COLLATE utf8mb4_general_ci" }},
+		{"different column type", func(_ *tableDumpManifest, d *plan.TableDef) { d.Cols[0].Typ.Id = int32(types.T_int64) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest
+			m.Relations = append([]tableDumpRelation(nil), manifest.Relations...)
+			d := proto.Clone(def).(*plan.TableDef)
+			tc.edit(&m, d)
+			candidate, err := tableDumpReleasedPowerMainHash(t.Context(), d, &m, nil)
+			require.NoError(t, err)
+			require.Empty(t, candidate)
+		})
+	}
+}
+
+func TestTableDumpV1CollationIndependentExpression(t *testing.T) {
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		t.Helper()
+		expr, err := sqlplan.BindFuncExprImplByPlanExpr(t.Context(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	decimal := types.New(types.T_decimal64, 2, 1)
+	exponent := bind("cast", sqlplan.MakePlan2StringConstExprWithType("0.5"),
+		&plan.Expr{Typ: decimal.PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+	base := &plan.Expr{Typ: types.T_float64.ToType().PlanType(),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	power := bind("pow", base, exponent)
+	numericCheck := bind(">", power, sqlplan.MakePlan2Int32ConstExprWithType(0))
+	text := sqlplan.MakePlan2StringConstExprWithType("A")
+	textColumn := &plan.Expr{Typ: text.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	textCheck := bind("=", textColumn, text)
+	null := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	list := func(items ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: items}}}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		safe bool
+	}{
+		{"decimal cast from a string token", exponent, true},
+		{"ordinary numeric CHECK", numericCheck, true},
+		{"native datetime comparison", bind("=", &plan.Expr{Typ: types.T_datetime.ToType().PlanType(),
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}, &plan.Expr{Typ: types.T_datetime.ToType().PlanType(),
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}), true},
+		{"string comparison", textCheck, false},
+		{"NULL in numeric list", list(base, null), true},
+		{"string in list", list(base, text), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.safe, tableDumpV1CollationIndependentExpression(tc.expr))
+		})
+	}
+	def := &plan.TableDef{
+		Cols:   []*plan.ColDef{{Name: "b", Typ: base.Typ}},
+		Checks: []*plan.CheckDef{{Name: "c", Check: numericCheck}},
+	}
+	require.True(t, tableDumpV1CollationIndependent(def))
+	def.Checks[0].Check = textCheck
+	require.False(t, tableDumpV1CollationIndependent(def), "numeric columns do not make a string expression collation-independent")
+
+	t.Run("generated-only schema fingerprint", func(t *testing.T) {
+		// SQL and fingerprint are from the v4.2.9 gen_m metadata-only archive.
+		const sql = "create table gen_m (id int primary key, b double, g double generated always as (pow(b,0.5)) stored)"
+		const want = "b27065f0ec368fdabf2268edc9ab7da6a47b7b7da005f8d64addd9a94a902324"
+		manifest := &tableDumpManifest{Version: 1, SourceTable: "gen_m", CreateSQL: sql, SchemaHash: want}
+		target := &plan.TableDef{
+			Name: "gen_m", Createsql: sql, DefaultCharset: uint32(types.CharsetUTF8),
+			Cols: []*plan.ColDef{
+				{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Default: &plan.Default{}},
+				{Name: "b", Typ: base.Typ, Default: &plan.Default{NullAbility: true}},
+				{Name: "g", Typ: base.Typ, Default: &plan.Default{NullAbility: true},
+					GeneratedCol: &plan.GeneratedCol{Expr: power, OriginString: "pow(b, 0.5)", IsStored: true}},
+			},
+		}
+		hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest, nil)
+		require.NoError(t, err)
+		require.Equal(t, want, hash, "a numeric table with only a generated POW owner can match the released hash")
+		require.Equal(t, uint32(types.CharsetUTF8), target.DefaultCharset)
+		target.Cols[2].GeneratedCol.IsStored = false
+		hash, err = tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest, nil)
+		require.NoError(t, err)
+		require.NotEqual(t, want, hash, "changing STORED to VIRTUAL changes the fingerprint")
+	})
+}
+
+func TestTableDumpRestoreReleasedAnonymousPowerCheck(t *testing.T) {
+	// The upgraded archive contains the original release's auto-generated
+	// CHECK name and complete bound tree. The fresh target keeps its own name.
+	const sql = "create table ac(id int primary key,b double, check (power(b,0.5)>0))"
+	const expectedHash = "9dac0a8d3fbcc08e0a42eb070a4e9e71fef211047905d27009c01ff842c06a31"
+	const digest = "2178407bdd62005696361478374e4b3ed307051e5408364d52c588a0672a1637"
+	payload, err := base64.StdEncoding.DecodeString("Ih0SAmlkKhUIFhABICAo////////////ATICYWM6ACIaEgFiKhEIHyj///////////8BMgJhYzoCGAEiGhIKX19tb19yb3dpZBgBKggIZRABMgJhYzoAevcBCgpfX21vX2Noa18xEtMBCgIICjrMAQoJIICAgIAgQgE+Eo8BCgIIHzqIAQoOIICAgIDQEkIFcG93ZXISEwoNCB8o////////////ASoCEAESYQoGCB8QASgBOlcKDSCAgICA0AJCBGNhc3QSOgoICCAQASACKAE6LgoNIICAgIDQAkIEY2FzdBIPCgYIPRABIAMSBVoDMC41EgwKCAggEAEgAigBWgASCgoGCB8QASgBWgASLQoECB8QATolCg0ggICAgNACQgRjYXN0EgoKBAgXEAESAigAEggKBAgfEAFaABoTcG93ZXIoYGJgLCAwLjUpID4gMA==")
+	require.NoError(t, err)
+	var source plan.TableDef
+	require.NoError(t, source.Unmarshal(payload))
+	require.Equal(t, "__mo_chk_1", source.Checks[0].Name)
+
+	target := proto.Clone(&source).(*plan.TableDef)
+	target.Name, target.Createsql = "ac", sql
+	target.DefaultCharset = uint32(types.CharsetUTF8)
+	target.Cols[0].Primary = true
+	target.Pkey = &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+	target.Checks[0].Name = "ac_chk_1"
+	target.Checks[0].Check = sqlplan.MakePlan2Int32ConstExprWithType(0)
+
+	manifest := tableDumpManifest{
+		Version: tableDumpBoundFormatVersion, SourceTable: "ac", SourceDatabase: "r33147", CreateSQL: sql, SchemaHash: expectedHash,
+		Relations: []tableDumpRelation{{Role: "main", SourceTable: "ac", SchemaHash: expectedHash, LogicalSchemaHash: expectedHash}},
+	}
+	aliases := make(map[string]string)
+	hash, err := tableDumpReleasedPowerMainHash(t.Context(), target, &manifest, aliases)
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, hash)
+	require.Equal(t, map[string]string{"ac_chk_1": "__mo_chk_1"}, aliases)
+	restored, changed, err := tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, aliases, false)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "ac_chk_1", restored.Checks[0].Name)
+	require.True(t, proto.Equal(source.Checks[0].Check, restored.Checks[0].Check))
+	ctx := sqlplan.NewMockCompilerContext(true, newPlanTestProcess(t))
+	releasedPower, err := sqlplan.ProveTableDumpReleasedPower(ctx, target, restored)
+	require.NoError(t, err)
+	require.True(t, releasedPower)
+	_, _, err = tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil, false)
+	require.ErrorContains(t, err, "checks do not match target schema")
+
+	show := proto.Clone(target).(*plan.TableDef)
+	column := show.Cols[1]
+	column.Default = &plan.Default{NullAbility: true, OriginString: "null", Expr: &plan.Expr{Typ: column.Typ,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}}
+	_, _, err = tableDumpRestoredExpressionsWithCheckAliases(show, payload, digest, aliases, false)
+	require.ErrorContains(t, err, "default does not match target schema")
+	restored, changed, err = tableDumpRestoredExpressionsWithCheckAliases(show, payload, digest, aliases, true)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, proto.Equal(column.Default, restored.Cols[1].Default))
+
+	for _, owner := range []string{"source", "target"} {
+		t.Run("explicit "+owner+" name", func(t *testing.T) {
+			explicit := strings.Replace(sql, "check (", "constraint __mo_chk_1 check (", 1)
+			edited := manifest
+			dst := proto.Clone(target).(*plan.TableDef)
+			if owner == "source" {
+				edited.CreateSQL = explicit
+			} else {
+				dst.Createsql = explicit
+			}
+			aliases := make(map[string]string)
+			hash, err := tableDumpReleasedPowerMainHash(t.Context(), dst, &edited, aliases)
+			require.NoError(t, err)
+			require.Empty(t, hash)
+			require.Empty(t, aliases)
+		})
+	}
+}
+
+func TestTableDumpReleasedPowerNonTextAndCopyFingerprints(t *testing.T) {
+	for _, tc := range []struct {
+		table, sourceSQL, targetDDL, hash string
+		column                            *plan.ColDef
+	}{
+		{"uid", "create table uid(id int primary key,b double,u uuid, constraint ck check(power(b,0.5)>0))", "create table uid(id int primary key,b double,u uuid, constraint ck check(power(b,0.5)>0))",
+			"9712e89c19b201c827d6c04df4dceff632b4b64147e5baeee2846169b127a735", &plan.ColDef{Name: "u", Typ: plan.Type{Id: int32(types.T_uuid)}}},
+		{"octets", "create table octets(id int primary key,b double,v varbinary(16), constraint ck check(power(b,0.5)>0))", "create table octets(id int primary key,b double,v varbinary(16), constraint ck check(power(b,0.5)>0))",
+			"6c54a9034cb82b8a2e462b91e71f86b69c32d9ed63ac2e40e8b0003721ee2a65", &plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(types.T_varbinary), Width: 16, Charset: uint32(types.CharsetBinary)}}},
+		{"ckalt", "CREATE TABLE `r33147`.`ckalt_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709` (\n  `id` int NOT NULL,\n  `b` double DEFAULT NULL,\n  `other` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `ck` CHECK (power(`b`, 0.5) > 0)\n)", "create table ckalt(id int primary key,b double,other int, constraint ck check(power(b,0.5)>0))",
+			"3428c1496e76706187820a918daba346769e7a949030a54ac2abb445398a845e", &plan.ColDef{Name: "other", Typ: plan.Type{Id: int32(types.T_int32)}}},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			tc.column.Default = &plan.Default{NullAbility: true}
+			def := &plan.TableDef{
+				Name: tc.table, DbName: "target", Createsql: tc.targetDDL, DefaultCharset: uint32(types.CharsetUTF8),
+				Cols: []*plan.ColDef{
+					{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Default: &plan.Default{}},
+					{Name: "b", Typ: plan.Type{Id: int32(types.T_float64), Scale: -1}, Default: &plan.Default{NullAbility: true}},
+					tc.column,
+				},
+				Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Checks: []*plan.CheckDef{{Name: "ck", OriginSql: "power(`b`, 0.5) > 0"}},
+			}
+			for _, version := range []int{tableDumpFormatVersion, tableDumpBoundFormatVersion} {
+				manifest := &tableDumpManifest{
+					Version: version, SourceTable: tc.table, SourceDatabase: "r33147", CreateSQL: tc.sourceSQL, SchemaHash: tc.hash,
+					Relations: []tableDumpRelation{{Role: "main", SourceTable: tc.table, SchemaHash: tc.hash, LogicalSchemaHash: tc.hash}},
+				}
+				hash, err := tableDumpReleasedPowerMainHash(t.Context(), def, manifest, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.hash, hash)
+				changed := proto.Clone(def).(*plan.TableDef)
+				changed.Cols[2].Typ = plan.Type{Id: int32(types.T_varchar), Width: 16, Charset: uint32(types.CharsetUTF8)}
+				hash, err = tableDumpReleasedPowerMainHash(t.Context(), changed, manifest, nil)
+				require.NoError(t, err)
+				require.Empty(t, hash)
+			}
+		})
+	}
+}
+
+func TestTableDumpReleasedPowerRenamedAndNativeColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name, check, source, target, hash string
+		column                            *plan.ColDef
+	}{
+		{"ren", "ck_ren", "create table orig_case6 (id int primary key,b double,constraint ck_ren check(pow(b,0.5)>0))", "create table ren (id int primary key,b double,constraint ck_ren check(pow(b,0.5)>0))",
+			"4aa9c871feb4d13e3dc2003e0b208e16baf4003a84d5f0652d70bd4c25e9991f", nil},
+		{"js", "ck_js", "create table js (id int primary key,b double,j json,constraint ck_js check(pow(b,0.5)>0))", "create table js (id int primary key,b double,j json,constraint ck_js check(pow(b,0.5)>0))", "99576b48cc9126c30baec2df826c11db0503e46fc3131896f1f4aea346125341",
+			&plan.ColDef{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}}},
+		{"vf", "ck_vf", "create table vf (id int primary key,b double,v vecf32(3),constraint ck_vf check(pow(b,0.5)>0))", "create table vf (id int primary key,b double,v vecf32(3),constraint ck_vf check(pow(b,0.5)>0))", "7af90d6fb855727c827b620a0b8e67c2e9ba42b47dfbb1ca45d43715b1979d9c",
+			&plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}}},
+		{"vd", "ck_vd", "create table vd (id int primary key,b double,v vecf64(2),constraint ck_vd check(pow(b,0.5)>0))", "create table vd (id int primary key,b double,v vecf64(2),constraint ck_vd check(pow(b,0.5)>0))", "67d763f51b7b848221b361f5eff8b6d425b0058b9e52488ab1448b28f7325ebe",
+			&plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float64), Width: 2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := &plan.TableDef{
+				Name: tc.name, DbName: "target", Createsql: tc.target, DefaultCharset: uint32(types.CharsetUTF8),
+				Cols: []*plan.ColDef{
+					{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Default: &plan.Default{}},
+					{Name: "b", Typ: plan.Type{Id: int32(types.T_float64), Scale: -1}, Default: &plan.Default{NullAbility: true}},
+				},
+				Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Checks: []*plan.CheckDef{{Name: tc.check, OriginSql: "pow(`b`, 0.5) > 0"}},
+			}
+			if tc.column != nil {
+				tc.column.Default = &plan.Default{NullAbility: true}
+				target.Cols = append(target.Cols, tc.column)
+			}
+			for _, version := range []int{tableDumpFormatVersion, tableDumpBoundFormatVersion} {
+				main := tableDumpRelation{Role: "main", SourceTable: tc.name, SchemaHash: tc.hash}
+				if version == tableDumpBoundFormatVersion {
+					main.LogicalSchemaHash = tc.hash
+				}
+				manifest := &tableDumpManifest{Version: version, SourceTable: tc.name, SourceDatabase: "case6",
+					CreateSQL: tc.source, SchemaHash: tc.hash, Relations: []tableDumpRelation{main}}
+				hash, err := tableDumpReleasedPowerMainHash(t.Context(), target, manifest, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.hash, hash)
+
+				changed := proto.Clone(target).(*plan.TableDef)
+				changed.Checks[0].OriginSql = "pow(`b`, 0.5) >= 0"
+				hash, err = tableDumpReleasedPowerMainHash(t.Context(), changed, manifest, nil)
+				require.NoError(t, err)
+				require.Empty(t, hash)
+				if tc.column == nil {
+					for _, wrong := range []string{
+						strings.Replace(tc.source, "orig_case6", "otherdb.orig_case6", 1),
+						strings.Replace(tc.source, "orig_case6", "`ren_copy_01a2174a-abc9-4be1-b0fd-9068f52cf709`", 1),
+						strings.Replace(tc.source, "b double", "b float", 1),
+					} {
+						manifest.CreateSQL = wrong
+						hash, err = tableDumpReleasedPowerMainHash(t.Context(), target, manifest, nil)
+						require.NoError(t, err)
+						require.Empty(t, hash, "invalid renamed source declaration %s", wrong)
+					}
+					manifest.CreateSQL = strings.Replace(tc.source, "orig_case6", "sales_copy_log", 1)
+					hash, err = tableDumpReleasedPowerMainHash(t.Context(), target, manifest, nil)
+					require.NoError(t, err)
+					require.Equal(t, tc.hash, hash)
+					manifest.CreateSQL = tc.source
+					show := proto.Clone(target).(*plan.TableDef)
+					show.Createsql = "CREATE TABLE `ren` (`id` int NOT NULL, `b` double DEFAULT NULL, PRIMARY KEY (`id`), CONSTRAINT `ck_ren` CHECK (pow(`b`, 0.5) > 0))"
+					hash, err = tableDumpReleasedPowerMainHash(t.Context(), show, manifest, nil)
+					require.NoError(t, err)
+					require.Equal(t, tc.hash, hash)
+					manifest.CreateSQL = strings.Replace(tc.source, "pow(b,", "pow('b',", 1)
+					hash, err = tableDumpReleasedPowerMainHash(t.Context(), show, manifest, nil)
+					require.NoError(t, err)
+					require.Empty(t, hash, "a string argument is not the bound column")
+				} else {
+					changed.Checks[0].OriginSql = target.Checks[0].OriginSql
+					changed.Checks[0].Check = &plan.Expr{Typ: tc.column.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}
+					require.False(t, tableDumpV1CollationIndependent(changed), "the type is allowed only without expression use")
+
+					show := proto.Clone(target).(*plan.TableDef)
+					show.Createsql = strings.Replace(show.Createsql, ",constraint", " DEFAULT NULL,constraint", 1)
+					column := show.Cols[2]
+					column.Default = &plan.Default{NullAbility: true, OriginString: "NULL",
+						Expr: &plan.Expr{Typ: column.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}}
+					hash, err = tableDumpReleasedPowerMainHash(t.Context(), show, manifest, nil)
+					require.NoError(t, err)
+					require.Equal(t, tc.hash, hash, "an explicit native NULL has no sorting dependency")
+
+					column.Default.Expr.GetLit().Src = sqlplan.MakePlan2StringConstExprWithType("converted")
+					require.False(t, tableDumpV1CollationIndependent(show), "a folded source is still relevant")
+					column.Default.Expr.GetLit().Src = nil
+					column.Default.OriginString = "cast('converted' as json)"
+					require.False(t, tableDumpV1CollationIndependent(show), "the SQL origin must be NULL itself")
+				}
+			}
+		})
+	}
+}
+
+func TestTableDumpReleasedPowerPackedIndexFingerprints(t *testing.T) {
+	// Types and digests are from the official v4.2.9 index and the
+	// upgraded/fresh indexes for the same KEY k_b(b) declaration.
+	const targetName = "__mo_index_secondary_01a218bd-a340-7b1f-95d8-ce1d08f0d0f8"
+	const releasedName = "__mo_index_secondary_01a21884-98ef-7d67-81b4-cb523d17accc"
+	index := &plan.TableDef{Name: targetName, TableType: catalog.SystemIndexRel,
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName, Names: []string{catalog.IndexTableIndexColName}}}
+	for _, column := range []struct {
+		name, typeBytes string
+	}{
+		{catalog.IndexTableIndexColName, "003D000100000000000000300001FFFE00000000"},
+		{catalog.IndexTablePrimaryColName, "0016000000000000000000080000004000000001"},
+		{catalog.Row_ID, "0065000000000000000000300000000000000000"},
+	} {
+		data, err := hex.DecodeString(column.typeBytes)
+		require.NoError(t, err)
+		var typ types.Type
+		require.NoError(t, typ.Unmarshal(data))
+		col := &plan.ColDef{Name: column.name, Typ: typ.PlanType(), Default: &plan.Default{},
+			Primary: column.name == catalog.IndexTableIndexColName, Hidden: column.name == catalog.Row_ID}
+		col.Typ.NotNullable = true
+		index.Cols = append(index.Cols, col)
+	}
+	master := &plan.TableDef{
+		Cols:    []*plan.ColDef{{Name: "id", Typ: index.Cols[1].Typ}, {Name: "b", Typ: plan.Type{Id: int32(types.T_float64), Scale: -1}}},
+		Pkey:    &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes: []*plan.IndexDef{{IndexName: "k_b", IndexTableName: index.Name, Parts: []string{"b", catalog.CreateAlias("id")}}},
+	}
+	fresh := tableDumpRelation{Role: "index", IndexName: "k_b", SourceTable: targetName,
+		SchemaHash:        "b523ede81af4cec0718a2935ca7894c9b95123510af5ab93e0a2d96025c60612",
+		LogicalSchemaHash: "07df512a4b9282b355ca21dba69d1b503a89c9f38a3e55cc573d176bd98eedd7"}
+	physical, err := tableSchemaHash(index)
+	require.NoError(t, err)
+	require.Equal(t, fresh.SchemaHash, physical)
+	logical, err := tableLogicalSchemaHashWithResolver(t.Context(), index, nil)
+	require.NoError(t, err)
+	require.Equal(t, fresh.LogicalSchemaHash, logical)
+
+	v1 := tableDumpRelation{Role: "index", IndexName: "k_b", SourceTable: releasedName,
+		SchemaHash: "cc4b228fb63d97cae51f5628c4a3c08c6fe9c2a72ac24e710107597fc834208e"}
+	v3 := tableDumpRelation{Role: "index", IndexName: "k_b", SourceTable: releasedName,
+		SchemaHash:        "851c1a3832f3c1d9f5c965f3fd90ad9fbe7911da93bb4b5c52f30efd04e76966",
+		LogicalSchemaHash: "e02dab002d27faa1c8316b60a7d5de7335150b1ade69d3ed3d3105294bd2b822"}
+	for version, relation := range map[int]tableDumpRelation{1: v1, 3: v3} {
+		match, err := tableDumpReleasedIndexSchemaMatches(t.Context(), master, index, fresh, relation, version)
+		require.NoError(t, err)
+		require.True(t, match, "complete released index schema for v%d", version)
+		require.False(t, tableDumpRelationSchemaMatches(fresh, relation), "this is not a normal match")
+	}
+
+	for _, tc := range []struct {
+		name string
+		edit func(*plan.TableDef, *plan.TableDef, *tableDumpRelation)
+	}{
+		{"incorrect physical hash", func(_, _ *plan.TableDef, dump *tableDumpRelation) { dump.SchemaHash = fresh.SchemaHash }},
+		{"incorrect logical hash", func(_, _ *plan.TableDef, dump *tableDumpRelation) { dump.LogicalSchemaHash = "wrong" }},
+		{"current logical and released physical", func(_, _ *plan.TableDef, dump *tableDumpRelation) { dump.LogicalSchemaHash = fresh.LogicalSchemaHash }},
+		{"not the released hidden index name", func(_, _ *plan.TableDef, dump *tableDumpRelation) { dump.SourceTable = "user_table" }},
+		{"different native key width", func(_, def *plan.TableDef, _ *tableDumpRelation) { def.Cols[0].Typ.Width-- }},
+		{"text key cannot prove equivalent tuple bytes", func(m, _ *plan.TableDef, _ *tableDumpRelation) { m.Cols[1].Typ.Id = int32(types.T_varchar) }},
+		{"different primary key layout", func(_, def *plan.TableDef, _ *tableDumpRelation) {
+			def.Pkey.PkeyColName = catalog.IndexTablePrimaryColName
+		}},
+		{"different algorithm", func(m, _ *plan.TableDef, _ *tableDumpRelation) { m.Indexes[0].IndexAlgo = "rtree" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, d, dump := proto.Clone(master).(*plan.TableDef), proto.Clone(index).(*plan.TableDef), v3
+			tc.edit(m, d, &dump)
+			match, err := tableDumpReleasedIndexSchemaMatches(t.Context(), m, d, fresh, dump, tableDumpBoundFormatVersion)
+			require.NoError(t, err)
+			require.False(t, match)
+		})
+	}
+	currentEquivalent := fresh
+	currentEquivalent.SchemaHash = "another-modern-physical-representation"
+	match, err := tableDumpReleasedIndexSchemaMatches(t.Context(), master, index, fresh, currentEquivalent, tableDumpBoundFormatVersion)
+	require.NoError(t, err)
+	require.True(t, match, "a genuinely current logical match does not require equal raw metadata")
+
+	t.Run("explicit and implicit allocators stay out of the carrier", func(t *testing.T) {
+		for _, tc := range []struct {
+			implicit                   bool
+			releasedName, raw, logical string
+		}{
+			{false, "__mo_index_secondary_01a218c7-76fc-7df0-aa10-96547196a95a", "851c1a3832f3c1d9f5c965f3fd90ad9fbe7911da93bb4b5c52f30efd04e76966", "e02dab002d27faa1c8316b60a7d5de7335150b1ade69d3ed3d3105294bd2b822"},
+			{true, "__mo_index_secondary_01a218c7-fcec-76d3-afcf-0e42c95e0aa6", "4c756b6bd500f7255c396e06f83e7657f7ed656856e2600a6f2549b3d6e8b158", "2f169f2666d4c5d87602dbfa43d6cff2ad51e0dbba4ec09f3245f4aa7c5ab26b"},
+		} {
+			m, d := proto.Clone(master).(*plan.TableDef), proto.Clone(index).(*plan.TableDef)
+			m.Cols[0].Typ.AutoIncr = true
+			if tc.implicit {
+				m.Cols[0].Name, m.Cols[0].Hidden = catalog.FakePrimaryKeyColName, true
+				m.Cols[0].Typ.Id, m.Cols[0].Typ.Width, m.Cols[0].Typ.Scale = int32(types.T_uint64), 0, 0
+				m.Pkey.PkeyColName, m.Pkey.Names = m.Cols[0].Name, []string{m.Cols[0].Name}
+				m.Indexes[0].Parts[1] = catalog.CreateAlias(m.Cols[0].Name)
+				d.Cols[1].Typ = m.Cols[0].Typ
+				d.Cols[1].Typ.AutoIncr = false
+			}
+			dump := tableDumpRelation{Role: "index", IndexName: "k_b", SourceTable: tc.releasedName,
+				SchemaHash: tc.raw, LogicalSchemaHash: tc.logical}
+			match, err := tableDumpReleasedIndexSchemaMatches(t.Context(), m, d, fresh, dump, tableDumpBoundFormatVersion)
+			require.NoError(t, err)
+			require.True(t, match)
+			d.Cols[1].Typ.AutoIncr = true
+			match, err = tableDumpReleasedIndexSchemaMatches(t.Context(), m, d, fresh, dump, tableDumpBoundFormatVersion)
+			require.NoError(t, err)
+			require.False(t, match, "the carrier cannot own the allocator")
+		}
+	})
+
+	t.Run("composite key carrier", func(t *testing.T) {
+		m, d := proto.Clone(master).(*plan.TableDef), proto.Clone(index).(*plan.TableDef)
+		m.Pkey.PkeyColName, m.Pkey.Names = catalog.CPrimaryKeyColName, []string{"id", "j"}
+		m.Cols = append(m.Cols, &plan.ColDef{Name: "j", Typ: m.Cols[0].Typ},
+			&plan.ColDef{Name: catalog.CPrimaryKeyColName, Hidden: true, Typ: d.Cols[0].Typ})
+		m.Indexes[0].Parts[1] = catalog.CreateAlias(catalog.CPrimaryKeyColName)
+		d.Cols[1].Typ = d.Cols[0].Typ
+		for _, tc := range []struct {
+			version      int
+			raw, logical string
+		}{
+			{tableDumpFormatVersion, "5933a5c55cab5179cd4d71e8cdc0900e3800c326a9a128b180755a45c9ce5b13", ""},
+			{tableDumpBoundFormatVersion, "dba7f04135417ad69029e2afc2059cd48e15d85cd1f9938f3426eb62fe5c4d5e", "4df06598b88127b123c600875866c9d572102e3e0ce4e3e5de2eab2676e74c76"},
+		} {
+			dump := tableDumpRelation{Role: "index", IndexName: "k_b", SourceTable: "__mo_index_secondary_01a218c9-0324-7817-af11-2bda2ee904d5",
+				SchemaHash: tc.raw, LogicalSchemaHash: tc.logical}
+			match, err := tableDumpReleasedIndexSchemaMatches(t.Context(), m, d, fresh, dump, tc.version)
+			require.NoError(t, err)
+			require.True(t, match)
+		}
+	})
+
+}
+
+func TestTableDumpReleasedRenamedAnonymousShow(t *testing.T) {
+	// Release RENAME retained the original anonymous CHECK before the KEY.
+	// The published SHOW CREATE names the CHECK and prints it after the KEY.
+	const source = "create table old_anix(id int,j int,b double,primary key(id), check(pow(b,0.5)>0),key k_b(b))"
+	const show = "CREATE TABLE `anix` (`id` int NOT NULL, `j` int DEFAULT NULL, `b` double DEFAULT NULL, PRIMARY KEY (`id`), KEY `k_b` (`b`), CONSTRAINT `__mo_chk_1` CHECK (pow(`b`, 0.5) > 0))"
+	const hash = "29189fec0dd23d182d3a6d167e9cfab1d475e75ce0eed04bc45e721a00a9f02e"
+	const digest = "136af0aeb87c4bf65880ffe711b4048afbcf61cc3f17749ff1a9969b7e5b8c98"
+	payload, err := base64.StdEncoding.DecodeString("Ih8SAmlkKhcIFhABICAo////////////ATIEYW5peDoAIh4SAWoqFQgWICAo////////////ATIEYW5peDoCGAEiHBIBYioTCB8o////////////ATIEYW5peDoCGAEiHBIKX19tb19yb3dpZBgBKgoIZRABMgRhbml4OgB69QEKCl9fbW9fY2hrXzES0wEKAggKOswBCgkggICAgCBCAT4SjwEKAggfOogBCg4ggICAgNASQgVwb3dlchITCg0IHyj///////////8BKgIQAhJhCgYIHxABKAE6VwoNIICAgIDQAkIEY2FzdBI6CggIIBABIAIoATouCg0ggICAgNACQgRjYXN0Eg8KBgg9EAEgAxIFWgMwLjUSDAoICCAQASACKAFaABIKCgYIHxABKAFaABItCgQIHxABOiUKDSCAgICA0AJCBGNhc3QSCgoECBcQARICKAASCAoECB8QAVoAGhFwb3coYGJgLCAwLjUpID4gMA==")
+	require.NoError(t, err)
+	var archived plan.TableDef
+	require.NoError(t, archived.Unmarshal(payload))
+	target := proto.Clone(&archived).(*plan.TableDef)
+	target.Name, target.Createsql, target.DefaultCharset = "anix", show, uint32(types.CharsetUTF8)
+	target.Cols[0].Primary = true
+	target.Pkey = &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+	target.Indexes = []*plan.IndexDef{{IndexName: "k_b", Parts: []string{"b", catalog.CreateAlias("id")}}}
+	target.Checks[0].Check = sqlplan.MakePlan2Int32ConstExprWithType(0)
+
+	for _, version := range []int{tableDumpFormatVersion, tableDumpBoundFormatVersion} {
+		main := tableDumpRelation{Role: "main", SourceTable: target.Name, SchemaHash: hash}
+		if version == tableDumpBoundFormatVersion {
+			main.LogicalSchemaHash = hash
+		}
+		manifest := &tableDumpManifest{Version: version, CreateSQL: source, SourceTable: target.Name, SourceDatabase: "s_anix",
+			SchemaHash: hash, Relations: []tableDumpRelation{main}}
+		matched, err := tableDumpReleasedPowerMainHash(t.Context(), target, manifest, nil)
+		require.NoError(t, err)
+		require.Equal(t, hash, matched)
+		if version == tableDumpBoundFormatVersion {
+			restored, changed, err := tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil, true)
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.Equal(t, "__mo_chk_1", restored.Checks[0].Name)
+			require.True(t, proto.Equal(archived.Checks[0].Check, restored.Checks[0].Check))
+		}
+		for _, wrong := range []struct {
+			name, source, target, catalogName string
+		}{
+			{"different catalog name", source, show, "anix_chk_1"},
+			{"wrong ordinal", source, strings.ReplaceAll(show, "__mo_chk_1", "__mo_chk_2"), "__mo_chk_2"},
+			{"different declaration", source, strings.ReplaceAll(show, "> 0", ">= 0"), "__mo_chk_1"},
+			{"different source name", strings.ReplaceAll(source, "check(", "constraint user_check check("), show, "__mo_chk_1"},
+			{"different source literal", strings.ReplaceAll(source, "pow(b,", "pow('b',"), show, "__mo_chk_1"},
+		} {
+			dst := proto.Clone(target).(*plan.TableDef)
+			edited := *manifest
+			dst.Createsql, dst.Checks[0].Name, edited.CreateSQL = wrong.target, wrong.catalogName, wrong.source
+			match, err := tableDumpReleasedPowerMainHash(t.Context(), dst, &edited, nil)
+			require.NoError(t, err)
+			require.Empty(t, match, wrong.name)
+		}
+	}
+}
+
+func TestTableDumpReleasedColumnCheckAndCompositeShow(t *testing.T) {
+	for _, tc := range []struct {
+		name, database, original, show, hash, payload string
+		composite                                     bool
+	}{
+		{"acol", "relcolcheck6", "create table old_acol(id int primary key,b double check (pow(b,0.5)>0),key k_b(b))", "CREATE TABLE `acol` (\n  `id` int NOT NULL,\n  `b` double DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `k_b` (`b`),\n  CONSTRAINT `__mo_chk_1` CHECK (pow(`b`, 0.5) > 0)\n)", "39a32bb78f26af1f7fa63c72ba19ea0b81e6bd0874524718a8845e41d24abfef", "Ih8SAmlkKhcIFhABICAo////////////ATIEYWNvbDoAIhwSAWIqEwgfKP///////////wEyBGFjb2w6AhgBIhwSCl9fbW9fcm93aWQYASoKCGUQATIEYWNvbDoAevUBCgpfX21vX2Noa18xEtMBCgIICjrMAQoJIICAgIAgQgE+Eo8BCgIIHzqIAQoOIICAgIDQEkIFcG93ZXISEwoNCB8o////////////ASoCEAESYQoGCB8QASgBOlcKDSCAgICA0AJCBGNhc3QSOgoICCAQASACKAE6LgoNIICAgIDQAkIEY2FzdBIPCgYIPRABIAMSBVoDMC41EgwKCAggEAEgAigBWgASCgoGCB8QASgBWgASLQoECB8QATolCg0ggICAgNACQgRjYXN0EgoKBAgXEAESAigAEggKBAgfEAFaABoRcG93KGBiYCwgMC41KSA+IDA=", false},
+		{"ancp", "s_ancp", "create table old_ancp(id int,j int,b double,primary key(id,j), check(pow(b,0.5)>0),key k_b(b))", "CREATE TABLE `ancp` (\n  `id` int NOT NULL,\n  `j` int NOT NULL,\n  `b` double DEFAULT NULL,\n  PRIMARY KEY (`id`,`j`),\n  KEY `k_b` (`b`),\n  CONSTRAINT `__mo_chk_1` CHECK (pow(`b`, 0.5) > 0)\n)", "10c23bb88649f512e1d782ff464045e655151979be4c4751291c3388ef6f12a7", "Ih8SAmlkKhcIFhABICAo////////////ATIEYW5jcDoAIh4SAWoqFwgWEAEgICj///////////8BMgRhbmNwOgAiHBIBYioTCB8o////////////ATIEYW5jcDoCGAEiJBIOX19tb19jcGtleV9jb2wYASoOCD0QASD//wMyBGFuY3A6ACIcEgpfX21vX3Jvd2lkGAEqCghlEAEyBGFuY3A6AHr1AQoKX19tb19jaGtfMRLTAQoCCAo6zAEKCSCAgICAIEIBPhKPAQoCCB86iAEKDiCAgICA0BJCBXBvd2VyEhMKDQgfKP///////////wEqAhACEmEKBggfEAEoATpXCg0ggICAgNACQgRjYXN0EjoKCAggEAEgAigBOi4KDSCAgICA0AJCBGNhc3QSDwoGCD0QASADEgVaAzAuNRIMCggIIBABIAIoAVoAEgoKBggfEAEoAVoAEi0KBAgfEAE6JQoNIICAgIDQAkIEY2FzdBIKCgQIFxABEgIoABIICgQIHxABWgAaEXBvdyhgYmAsIDAuNSkgPiAw", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := base64.StdEncoding.DecodeString(tc.payload)
+			require.NoError(t, err)
+			var target plan.TableDef
+			require.NoError(t, target.Unmarshal(data))
+			target.Name, target.Createsql, target.DefaultCharset = tc.name, tc.show, uint32(types.CharsetUTF8)
+			target.Pkey = &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			if tc.composite {
+				target.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"id", "j"}}
+				sqlplan.FindColumn(target.Cols, catalog.CPrimaryKeyColName).Typ.Charset = uint32(types.CharsetBinary)
+			} else {
+				target.Cols[0].Primary = true
+			}
+			target.Indexes = []*plan.IndexDef{{IndexName: "k_b", Parts: []string{"b", catalog.CreateAlias(target.Pkey.PkeyColName)}}}
+			manifest := &tableDumpManifest{Version: tableDumpFormatVersion, SourceDatabase: tc.database, SourceTable: tc.name,
+				CreateSQL: tc.original, SchemaHash: tc.hash,
+				Relations: []tableDumpRelation{{Role: "main", SourceTable: tc.name, SchemaHash: tc.hash}}}
+			hash, err := tableDumpReleasedPowerMainHash(t.Context(), &target, manifest, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.hash, hash)
+			for _, negative := range []struct {
+				name    string
+				applies bool
+				alter   func(*plan.TableDef, *tableDumpManifest)
+			}{
+				{"predicate", true, func(_ *plan.TableDef, dump *tableDumpManifest) {
+					dump.CreateSQL = strings.ReplaceAll(dump.CreateSQL, ">0", ">=0")
+				}},
+				{"old column", !tc.composite, func(_ *plan.TableDef, dump *tableDumpManifest) {
+					dump.CreateSQL = strings.ReplaceAll(dump.CreateSQL, "primary key,b double check (pow(b,0.5)>0)", "primary key check (pow(b,0.5)>0),b double")
+				}},
+				{"bound column", !tc.composite, func(def *plan.TableDef, _ *tableDumpManifest) {
+					require.NoError(t, plan.VisitExprTree(def.Checks[0].Check, func(expr *plan.Expr) error {
+						if ref := expr.GetCol(); ref != nil {
+							ref.ColPos = 0
+						}
+						return nil
+					}))
+				}},
+				{"primary key order", tc.composite, func(def *plan.TableDef, _ *tableDumpManifest) {
+					def.Createsql = strings.ReplaceAll(def.Createsql, "(`id`,`j`)", "(`j`,`id`)")
+				}},
+			} {
+				if !negative.applies {
+					continue
+				}
+				edit := *manifest
+				dst := proto.Clone(&target).(*plan.TableDef)
+				negative.alter(dst, &edit)
+				require.False(t, edit.CreateSQL == manifest.CreateSQL && proto.Equal(dst, &target), negative.name)
+				hash, err = tableDumpReleasedPowerMainHash(t.Context(), dst, &edit, nil)
+				require.NoError(t, err)
+				require.Empty(t, hash, negative.name)
+			}
+			if !tc.composite {
+				manifest.CreateSQL = strings.ReplaceAll(tc.original, "primary key,b double", "key,b double null")
+				hash, err = tableDumpReleasedPowerMainHash(t.Context(), &target, manifest, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.hash, hash, "inline KEY and written NULL retain the same declaration")
+			}
+		})
+	}
+}
+
+func TestTableDumpReleasedConstantColumnCheckShow(t *testing.T) {
+	parse := func(sql string) *tree.CreateTable {
+		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err)
+		return stmt.(*tree.CreateTable)
+	}
+	original := parse("create table old_t (id int, b double check (1 > 0), check (pow(b,0.5) > 0))")
+	show := parse("create table t (id int, b double, constraint __mo_chk_1 check (1 > 0), constraint __mo_chk_2 check (pow(b,0.5) > 0))")
+	catalogDef := &plan.TableDef{
+		Cols: []*plan.ColDef{{Name: "id"}, {Name: "b"}},
+		Checks: []*plan.CheckDef{
+			{Name: "__mo_chk_1", Check: sqlplan.MakePlan2BoolConstExprWithType(true)},
+			{Name: "__mo_chk_2"},
+		},
+	}
+	renderedNames := map[int]bool{0: true, 1: true}
+	require.True(t, sameTableDumpRenameDeclaration(original, show, catalogDef, renderedNames))
+	otherOwner := parse("create table t (id int check (1 > 0), b double, check (pow(b,0.5) > 0))")
+	require.False(t, sameTableDumpRenameDeclaration(original, otherOwner, catalogDef, nil))
+	catalogDef.Cols[1].Hidden = true
+	require.False(t, sameTableDumpRenameDeclaration(original, show, catalogDef, renderedNames))
+	catalogDef.Cols[1].Hidden = false
+	catalogDef.Checks[0].Check = nil
+	require.False(t, sameTableDumpRenameDeclaration(original, show, catalogDef, renderedNames))
+}
+
+func TestTableDumpReleasedExplicitNullToImplicit(t *testing.T) {
+	for _, tc := range []struct {
+		column, payload, digest string
+	}{
+		{"j", "Ih0SAmlkKhUIFhABICAo////////////ATICanM6ACIaEgFiKhEIHyj///////////8BMgJqczoCGAEiHxIBaioGCD4yAmpzOhIKCAoCCD4SAggBEgRudWxsGAEiGhIKX19tb19yb3dpZBgBKggIZRABMgJqczoAevABCgVja19qcxLTAQoCCAo6zAEKCSCAgICAIEIBPhKPAQoCCB86iAEKDiCAgICA0BJCBXBvd2VyEhMKDQgfKP///////////wEqAhABEmEKBggfEAEoATpXCg0ggICAgNACQgRjYXN0EjoKCAggEAEgAigBOi4KDSCAgICA0AJCBGNhc3QSDwoGCD0QASADEgVaAzAuNRIMCggIIBABIAIoAVoAEgoKBggfEAEoAVoAEi0KBAgfEAE6JQoNIICAgIDQAkIEY2FzdBIKCgQIFxABEgIoABIICgQIHxABWgAaEXBvdyhgYmAsIDAuNSkgPiAw", "cd8cd2d15d02b2c07d1fb98cefc8d89a3e1f5ab9c9dfee7f5522bbb7e2ca4e76"},
+		{"v", "Ih0SAmlkKhUIFhABICAo////////////ATICdmY6ACIaEgFiKhEIHyj///////////8BMgJ2ZjoCGAEiJRIBdioJCOABIAMyAnZmOhUKCwoFCOABIAMSAggBEgRudWxsGAEiGhIKX19tb19yb3dpZBgBKggIZRABMgJ2ZjoAevABCgVja192ZhLTAQoCCAo6zAEKCSCAgICAIEIBPhKPAQoCCB86iAEKDiCAgICA0BJCBXBvd2VyEhMKDQgfKP///////////wEqAhABEmEKBggfEAEoATpXCg0ggICAgNACQgRjYXN0EjoKCAggEAEgAigBOi4KDSCAgICA0AJCBGNhc3QSDwoGCD0QASADEgVaAzAuNRIMCggIIBABIAIoAVoAEgoKBggfEAEoAVoAEi0KBAgfEAE6JQoNIICAgIDQAkIEY2FzdBIKCgQIFxABEgIoABIICgQIHxABWgAaEXBvdyhgYmAsIDAuNSkgPiAw", "ff3068be37856ac8776fc223e2af1a5e62d94d2d332997b29fa9f4f5bccb8a15"},
+	} {
+		t.Run(tc.column, func(t *testing.T) {
+			payload, err := base64.StdEncoding.DecodeString(tc.payload)
+			require.NoError(t, err)
+			var archived plan.TableDef
+			require.NoError(t, archived.Unmarshal(payload))
+			target := proto.Clone(&archived).(*plan.TableDef)
+			column := sqlplan.FindColumn(target.Cols, tc.column)
+			require.True(t, tableDumpDirectNullDefault(column))
+			column.Default = &plan.Default{NullAbility: true}
+			target.Checks[0].Check = sqlplan.MakePlan2Int32ConstExprWithType(0)
+			_, _, err = tableDumpRestoredExpressionsWithCheckAliases(target, payload, tc.digest, nil, false)
+			require.ErrorContains(t, err, "default does not match target schema")
+			restored, changed, err := tableDumpRestoredExpressionsWithCheckAliases(target, payload, tc.digest, nil, true)
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.True(t, proto.Equal(column.Default, sqlplan.FindColumn(restored.Cols, tc.column).Default))
+
+			implicit := proto.Clone(&archived).(*plan.TableDef)
+			sqlplan.FindColumn(implicit.Cols, tc.column).Default = column.Default
+			implicitWire, implicitDigest, err := tableDumpBoundExpressions(implicit)
+			require.NoError(t, err)
+			explicitTarget := proto.Clone(&archived).(*plan.TableDef)
+			explicitTarget.Checks[0].Check = target.Checks[0].Check
+			restored, changed, err = tableDumpRestoredExpressionsWithCheckAliases(explicitTarget, implicitWire, implicitDigest, nil, true)
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.True(t, proto.Equal(sqlplan.FindColumn(explicitTarget.Cols, tc.column).Default,
+				sqlplan.FindColumn(restored.Cols, tc.column).Default))
+
+			mutations := map[string]func(*plan.Default){
+				"source":      func(d *plan.Default) { d.Expr.GetLit().Src = sqlplan.MakePlan2StringConstExprWithType("x") },
+				"value":       func(d *plan.Default) { d.Expr.GetLit().Value = &plan.Literal_Dval{Dval: 1} },
+				"origin":      func(d *plan.Default) { d.OriginString = "cast('x' as json)" },
+				"nullability": func(d *plan.Default) { d.Expr.Typ.NotNullable = true },
+				"lineage":     func(d *plan.Default) { d.Expr.Typ.Table = "unrelated" },
+			}
+			if tc.column == "j" {
+				mutations["JSON type"] = func(d *plan.Default) { d.Expr.Typ.Id = int32(types.T_int32) }
+			} else {
+				mutations["vector dimension"] = func(d *plan.Default) { d.Expr.Typ.Width++ }
+				mutations["vector family"] = func(d *plan.Default) { d.Expr.Typ.Id = int32(types.T_array_float64) }
+			}
+			for name, mutate := range mutations {
+				t.Run(name, func(t *testing.T) {
+					other := proto.Clone(&archived).(*plan.TableDef)
+					mutate(sqlplan.FindColumn(other.Cols, tc.column).Default)
+					wire, digest, err := tableDumpBoundExpressions(other)
+					require.NoError(t, err)
+					_, _, err = tableDumpRestoredExpressionsWithCheckAliases(target, wire, digest, nil, true)
+					require.ErrorContains(t, err, "default does not match target schema")
+					_, _, err = tableDumpRestoredExpressionsWithCheckAliases(other, implicitWire, implicitDigest, nil, true)
+					require.ErrorContains(t, err, "default does not match target schema")
+				})
+			}
+		})
+	}
+}
+
+func TestTableDumpReleasedCompositeShowAnonymousTarget(t *testing.T) {
+	// The v3 renderer named the released CHECK but the original target DDL
+	// is anonymous. Use the original wire CHECK and authoritative index shape.
+	const show = "CREATE TABLE `ancp` (\n  `id` int NOT NULL,\n  `j` int NOT NULL,\n  `b` double DEFAULT NULL,\n  PRIMARY KEY (`id`,`j`),\n  KEY `k_b` (`b`),\n  CONSTRAINT `__mo_chk_1` CHECK (pow(`b`, 0.5) > 0)\n) COLLATE=utf8mb4_bin"
+	const digest = "505251a43b750e98b9c936d8fb57fe29f1f29c6b639c01f1d82e07430a04e231"
+	const hash = "d4dc7e91fa044169762738a5338078154c92daad64842148f49cab309d673278"
+	payload, err := base64.StdEncoding.DecodeString("Ih8SAmlkKhcIFhABICAo////////////ATIEYW5jcDoAIh4SAWoqFwgWEAEgICj///////////8BMgRhbmNwOgAiHBIBYioTCB8o////////////ATIEYW5jcDoCGAEiJBIOX19tb19jcGtleV9jb2wYASoOCD0QASD//wMyBGFuY3A6ACIcEgpfX21vX3Jvd2lkGAEqCghlEAEyBGFuY3A6AHr1AQoKX19tb19jaGtfMRLTAQoCCAo6zAEKCSCAgICAIEIBPhKPAQoCCB86iAEKDiCAgICA0BJCBXBvd2VyEhMKDQgfKP///////////wEqAhACEmEKBggfEAEoATpXCg0ggICAgNACQgRjYXN0EjoKCAggEAEgAigBOi4KDSCAgICA0AJCBGNhc3QSDwoGCD0QASADEgVaAzAuNRIMCggIIBABIAIoAVoAEgoKBggfEAEoAVoAEi0KBAgfEAE6JQoNIICAgIDQAkIEY2FzdBIKCgQIFxABEgIoABIICgQIHxABWgAaEXBvdyhgYmAsIDAuNSkgPiAw")
+	require.NoError(t, err)
+	var archived plan.TableDef
+	require.NoError(t, archived.Unmarshal(payload))
+	target := proto.Clone(&archived).(*plan.TableDef)
+	target.Name = "ancp"
+	target.Createsql = "create table ancp(id int,j int,b double,primary key(id,j),key k_b(b),check(pow(b,0.5)>0))"
+	target.DefaultCharset = uint32(types.CharsetUTF8)
+	target.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"id", "j"}}
+	target.Indexes = []*plan.IndexDef{{IndexName: "k_b", Parts: []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)}}}
+	sqlplan.FindColumn(target.Cols, catalog.CPrimaryKeyColName).Typ.Charset = uint32(types.CharsetBinary)
+	target.Checks[0].Name = "ancp_chk_1"
+	target.Checks[0].Check = sqlplan.MakePlan2Int32ConstExprWithType(0)
+	main := tableDumpRelation{Role: "main", SourceTable: "ancp", SchemaHash: hash, LogicalSchemaHash: hash}
+	manifest := &tableDumpManifest{Version: tableDumpBoundFormatVersion, CreateSQL: show, SourceTable: "ancp", SourceDatabase: "s_ancp",
+		SchemaHash: hash, Relations: []tableDumpRelation{main}}
+	aliases := make(map[string]string)
+	matched, err := tableDumpReleasedPowerMainHash(t.Context(), target, manifest, aliases)
+	require.NoError(t, err)
+	require.Equal(t, hash, matched)
+	require.Equal(t, map[string]string{"ancp_chk_1": "__mo_chk_1"}, aliases)
+	restored, changed, err := tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, aliases, true)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "ancp_chk_1", restored.Checks[0].Name)
+	require.True(t, proto.Equal(archived.Checks[0].Check, restored.Checks[0].Check))
+
+	for _, altered := range []string{
+		strings.ReplaceAll(show, "__mo_chk_1", "__mo_chk_2"),
+		strings.ReplaceAll(show, "> 0", ">= 0"),
+		strings.ReplaceAll(show, "utf8mb4_bin", "utf8mb4_general_ci"),
+	} {
+		manifest.CreateSQL = altered
+		match, err := tableDumpReleasedPowerMainHash(t.Context(), target, manifest, nil)
+		require.NoError(t, err)
+		require.Empty(t, match)
+	}
+}
+func TestTableDumpReleasedCompositeShowDeclaration(t *testing.T) {
+	// Both wire payload and schemas come from the official composite-PK
+	// fixture and its upgraded v3 DUMP.
+	const original = "create table ixcp(id int,j int,b double,primary key(id,j),key k_b(b),constraint ckcp check(pow(b,0.5)>0))"
+	const show = "CREATE TABLE `ixcp` (\n  `id` int NOT NULL,\n  `j` int NOT NULL,\n  `b` double DEFAULT NULL,\n  PRIMARY KEY (`id`,`j`),\n  KEY `k_b` (`b`),\n  CONSTRAINT `ckcp` CHECK (pow(`b`, 0.5) > 0)\n) COLLATE=utf8mb4_bin"
+	const rawV1 = "c3e282d8d5743a95a6eb7f4678fdd64d21de6f6bef481aae0cdb21c38653a273"
+	const rawV3 = "e682d1626060067ff4a8b29fd14bdcea5dec1b91d367dbe5a3d57846dcf64db4"
+	const digest = "1acf9c94c9ee431b69622948ff20d938357490b20d5f375b5cdb59632939bdc7"
+	payload, err := base64.StdEncoding.DecodeString("Ih8SAmlkKhcIFhABICAo////////////ATIEaXhjcDoAIh4SAWoqFwgWEAEgICj///////////8BMgRpeGNwOgAiHBIBYioTCB8o////////////ATIEaXhjcDoCGAEiJBIOX19tb19jcGtleV9jb2wYASoOCD0QASD//wMyBGl4Y3A6ACIcEgpfX21vX3Jvd2lkGAEqCghlEAEyBGl4Y3A6AHrvAQoEY2tjcBLTAQoCCAo6zAEKCSCAgICAIEIBPhKPAQoCCB86iAEKDiCAgICA0BJCBXBvd2VyEhMKDQgfKP///////////wEqAhACEmEKBggfEAEoATpXCg0ggICAgNACQgRjYXN0EjoKCAggEAEgAigBOi4KDSCAgICA0AJCBGNhc3QSDwoGCD0QASADEgVaAzAuNRIMCggIIBABIAIoAVoAEgoKBggfEAEoAVoAEi0KBAgfEAE6JQoNIICAgIDQAkIEY2FzdBIKCgQIFxABEgIoABIICgQIHxABWgAaEXBvdyhgYmAsIDAuNSkgPiAw")
+	require.NoError(t, err)
+	var archived plan.TableDef
+	require.NoError(t, archived.Unmarshal(payload))
+	target := proto.Clone(&archived).(*plan.TableDef)
+	target.Name, target.Createsql, target.DefaultCharset = "ixcp", original, uint32(types.CharsetUTF8)
+	target.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"id", "j"}}
+	target.Indexes = []*plan.IndexDef{{IndexName: "k_b", Parts: []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)}}}
+	hidden := sqlplan.FindColumn(target.Cols, catalog.CPrimaryKeyColName)
+	require.NotNil(t, hidden)
+	hidden.Typ.Charset = uint32(types.CharsetBinary)
+	require.True(t, tableDumpNativeCompositePK(target))
+	target.Checks[0].Check = sqlplan.MakePlan2Int32ConstExprWithType(0)
+
+	for _, tc := range []struct {
+		version   int
+		sql, hash string
+	}{
+		{tableDumpFormatVersion, original, rawV1},
+		{tableDumpBoundFormatVersion, show, rawV3},
+	} {
+		main := tableDumpRelation{Role: "main", SourceTable: "ixcp", SchemaHash: tc.hash}
+		if tc.version == tableDumpBoundFormatVersion {
+			main.LogicalSchemaHash = tc.hash
+		}
+		manifest := &tableDumpManifest{Version: tc.version, SourceTable: "ixcp", SourceDatabase: "case6", CreateSQL: tc.sql,
+			SchemaHash: tc.hash, Relations: []tableDumpRelation{main}}
+		hash, err := tableDumpReleasedPowerMainHash(t.Context(), target, manifest, nil)
+		require.NoError(t, err)
+		require.Equal(t, tc.hash, hash)
+	}
+
+	ddl := parseTableDumpCreateDeclaration(t.Context(), show)
+	require.NotNil(t, ddl)
+	defer ddl.Free()
+	require.True(t, tableDumpMatchesReleasedCompositeShow(t.Context(), target, ddl))
+	changed := parseTableDumpCreateDeclaration(t.Context(), strings.Replace(show, "utf8mb4_bin", "utf8mb4_general_ci", 1))
+	require.NotNil(t, changed)
+	defer changed.Free()
+	require.False(t, tableDumpMatchesReleasedCompositeShow(t.Context(), target, changed))
+	_, _, err = tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil, false)
+	require.ErrorContains(t, err, "column does not match")
+	column := sqlplan.FindColumn(target.Cols, "b")
+	column.Default = &plan.Default{NullAbility: true, OriginString: "null", Expr: &plan.Expr{Typ: column.Typ,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}}
+	restored, changedBinding, err := tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil, true)
+	require.NoError(t, err)
+	require.True(t, changedBinding)
+	require.True(t, proto.Equal(column.Default, sqlplan.FindColumn(restored.Cols, "b").Default))
+	require.Equal(t, uint32(types.CharsetBinary), sqlplan.FindColumn(restored.Cols, catalog.CPrimaryKeyColName).Typ.Charset)
+	require.True(t, proto.Equal(archived.Checks[0].Check, restored.Checks[0].Check))
+	column.Default.Expr.GetLit().Isnull = false
+	_, _, err = tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil, true)
+	require.ErrorContains(t, err, "default does not match")
+}
+func TestTableDumpV1CheckDeclarations(t *testing.T) {
+	for _, sql := range []string{
+		"create table",
+		"select 1",
+		"create table t like s",
+		"create table t as select 1",
+		"create table other (a int)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, _, ok := testTableDumpCheckDeclarations(t.Context(), sql, "", "t")
+			require.False(t, ok)
+		})
+	}
+	names, implicitCharset, ok := testTableDumpCheckDeclarations(t.Context(),
+		"create table t(a int check (a > 0), constraint named check (a < 10)) character set utf8mb4", "", "t")
+	require.True(t, ok)
+	require.False(t, implicitCharset)
+	require.Equal(t, []string{"", "named"}, names)
+
+	const prefix = "create table "
+	const suffix = " (b double, constraint ck check(power(b,0.5)>0))"
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{"`db`.`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", true},
+		{"`other_db`.`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", false},
+		{"`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", false},
+		{"`db`.`tt_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", false},
+		{"`db`.`t_copy_01A2174A-ABC9-7BE1-B0FD-9068F52CF709`", false},
+		{"`db`.`t_copy_01a2174a-abc9-4be1-b0fd-9068f52cf709`", false},
+		{"`db`.`t_copy_01a2174a-abc9-7be1-30fd-9068f52cf709`", false},
+		{"`db`.`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709_extra`", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			names, _, ok := testTableDumpCheckDeclarations(t.Context(), prefix+tc.name+suffix, "db", "t")
+			require.Equal(t, tc.valid, ok)
+			if tc.valid {
+				require.Equal(t, []string{"ck"}, names)
+			}
+		})
+	}
+}
+
+func testTableDumpCheckDeclarations(ctx context.Context, sql, database, name string) ([]string, bool, bool) {
+	create := parseTableDumpCreateDeclaration(ctx, sql)
+	if create == nil {
+		return nil, false, false
+	}
+	defer create.Free()
+	if !tableDumpCreateTableMatches(&create.Table, database, name) {
+		return nil, false, false
+	}
+	names, implicit := collectTableDumpCheckDeclarations(create)
+	return names, implicit, true
 }
 
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {

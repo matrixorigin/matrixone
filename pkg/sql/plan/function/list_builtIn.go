@@ -9834,10 +9834,22 @@ var supportedMathBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		// Persisted expressions from v4.2.9 address overload 0.
+		bindingOverloads: []int{powerNullOnNonFiniteOverload},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return powerLegacy
+				},
+			},
+			{
+				overloadId: powerNullOnNonFiniteOverload,
 				args:       []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()

@@ -8953,37 +8953,50 @@ func evalRight(str string, length int64) string {
 	return string(runeStr[strLength-rightLength:])
 }
 
-func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// Overflow/underflow and NaN/Inf-input results stay row-local NULLs (#28375).
-	// A finite negative base with a finite non-integer exponent has no real
-	// value, so an evaluated row rejects with the DOUBLE out-of-range error
-	// (MySQL 1690, SQLSTATE 22003) instead of a silent NULL: the #28375
-	// contract's domain-shaped exception for the #31155 Expected. NULL
-	// inputs, skipped rows and all other results keep the #28375 contract.
-	// A zero-length batch evaluates no rows: the constant/constant template
-	// shape still invokes the callback once, so the domain check stays off
-	// for length 0 (colexec passes empty-batch row counts).
-	var domainErr error
-	err := opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
-		if length > 0 && v1 < 0 && !math.IsInf(v1, 0) &&
-			!math.IsNaN(v2) && !math.IsInf(v2, 0) && v2 != math.Trunc(v2) {
-			if domainErr == nil {
-				domainErr = moerr.NewOutOfRangeNoCtxf(
-					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+const powerNullOnNonFiniteOverload = 1
+
+// powerLegacy evaluates persisted POW overload 0 using its released error contract.
+func powerLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	base := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	exponent := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	rs := vector.MustFunctionResult[float64](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.Append(0, true); err != nil {
+				return err
 			}
-			return 0, nil
+			continue
 		}
+		b, baseNull := base.GetValue(row)
+		e, exponentNull := exponent.GetValue(row)
+		if baseNull || exponentNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value := math.Pow(b, e)
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return moerr.NewOutOfRangeNoCtxf(
+				"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", b, e)
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var errNonFinitePowerResult = moerr.NewOutOfRangeNoCtx("float64", "non-finite power result")
+
+func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
 		res := math.Pow(v1, v2)
 		if math.IsNaN(res) || math.IsInf(res, 0) {
-			return 0, moerr.NewOutOfRangeNoCtxf(
-				"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+			return 0, errNonFinitePowerResult
 		}
 		return res, nil
 	}, selectList)
-	if domainErr != nil {
-		return domainErr
-	}
-	return err
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

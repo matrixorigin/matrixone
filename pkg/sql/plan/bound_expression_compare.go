@@ -27,6 +27,7 @@ const (
 	boundExpressionNormalized boundExpressionProjection = iota
 	boundExpressionHistorical
 	boundExpressionLegacyOrigin
+	boundExpressionCatalogColumnScope
 )
 
 // sameProjectedBoundExpression compares read-only views instead of cloning whole
@@ -41,15 +42,25 @@ func sameProjectedBoundExpression(a, b *planpb.Expr, projection boundExpressionP
 	// allocation-free comparison when neither policy would change this node.
 	if !boundExpressionHasProjectedChildren(a) && !boundExpressionHasProjectedChildren(b) &&
 		!boundExpressionTypeNeedsNormalization(a.Typ) && !boundExpressionTypeNeedsNormalization(b.Typ) &&
-		!boundExpressionNeedsHistoricalProjection(a, b, projection) {
+		!boundExpressionNeedsHistoricalProjection(a, b, projection) &&
+		(projection != boundExpressionCatalogColumnScope || a.Typ.NotNullable == b.Typ.NotNullable) {
 		return proto.Equal(a, b)
 	}
 	left, right := *a, *b
-	if projection != boundExpressionNormalized {
+	switch projection {
+	case boundExpressionCatalogColumnScope:
+		// Only compare independently rebound CREATE and catalog trees
+		// under this projection. Differences in structure or other type
+		// fields still make the SQL-only archive ambiguous.
+		left.Typ.Table, right.Typ.Table = "", ""
+		left.Typ.NotNullable, right.Typ.NotNullable = false, false
+	case boundExpressionHistorical, boundExpressionLegacyOrigin:
 		omitHistoricalFloatCoercibility(&left, &right)
+		fallthrough
+	default:
+		normalizeBoundExpressionType(&left.Typ)
+		normalizeBoundExpressionType(&right.Typ)
 	}
-	normalizeBoundExpressionType(&left.Typ)
-	normalizeBoundExpressionType(&right.Typ)
 	var leftChildren, rightChildren []*planpb.Expr
 	childProjection := projection
 	switch x := a.Expr.(type) {
@@ -125,7 +136,7 @@ func boundExpressionTypeNeedsNormalization(typ planpb.Type) bool {
 }
 
 func boundExpressionNeedsHistoricalProjection(a, b *planpb.Expr, projection boundExpressionProjection) bool {
-	if projection == boundExpressionNormalized {
+	if projection != boundExpressionHistorical && projection != boundExpressionLegacyOrigin {
 		return false
 	}
 	candidate := *b

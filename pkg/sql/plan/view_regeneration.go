@@ -65,9 +65,10 @@ func ReplaceRegeneratedViewDependencies(
 
 type viewRegenerationContext struct {
 	CompilerContext
-	defaultDatabase     string
-	rootSQL             string
-	lowerCaseTableNames int64
+	defaultDatabase      string
+	rootSQL              string
+	lowerCaseTableNames  int64
+	powerNullOnNonFinite bool
 }
 
 // Use the error-returning catalog lookup rather than DatabaseExists: the
@@ -243,10 +244,11 @@ func parsePersistedViewDefinition(
 	}
 
 	regenerationCtx := &viewRegenerationContext{
-		CompilerContext:     ctx,
-		defaultDatabase:     viewData.DefaultDatabase,
-		rootSQL:             viewData.Stmt,
-		lowerCaseTableNames: lowerCaseTableNames,
+		CompilerContext:      ctx,
+		defaultDatabase:      viewData.DefaultDatabase,
+		rootSQL:              viewData.Stmt,
+		lowerCaseTableNames:  lowerCaseTableNames,
+		powerNullOnNonFinite: viewData.PowerNullOnNonFinite,
 	}
 	parsed.ctx, parsed.data = regenerationCtx, viewData
 	parsed.selectStmt, parsed.columnNames = selectStmt, columnNames
