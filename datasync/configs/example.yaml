@@ -1,0 +1,49 @@
+mo_dump_path: /Users/liubo/Workspace/Projects/00-MatrixOrigin/mo_dump/mo-dump
+mysql_path: /usr/local/mysql/bin/mysql
+output_dir: ./runs
+parallelism: 2
+retry:
+  max_attempts: 3
+  backoff: 2s
+
+source:
+  name: default_source
+  host: 127.0.0.1
+  port: 6001
+  user: dsync_src_default:admin
+  password: "111"
+target:
+  name: default_target
+  host: 127.0.0.1
+  port: 6001
+  user: dsync_target_default:admin
+  password: "111"
+
+databases:
+  # Simple form: source and target database names are both dsync_shared.
+  - dsync_shared
+
+  # Simple mapping form: same database name, plus table filters.
+  - database: dsync_ops
+    exclude_tables:
+      - audit
+
+  # Full form: use it when source/target database names or tenant users differ.
+  - source:
+      name: tenant_a_db2
+      user: dsync_src_a:admin
+      database: dsync_a_db2
+    target:
+      name: target_a
+      user: dsync_target_a:admin
+      database: dsync_target_a2
+    include_tables:
+      - orders
+  - source:
+      name: tenant_b_db1
+      user: dsync_src_b:admin
+      database: dsync_b_db1
+    target:
+      name: target_b
+      user: dsync_target_b:admin
+      database: dsync_target_b1
