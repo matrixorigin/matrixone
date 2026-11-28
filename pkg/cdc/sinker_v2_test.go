@@ -230,7 +230,7 @@ func TestMysqlSinker2_TransactionLifecycle(t *testing.T) {
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
 
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -271,7 +271,7 @@ func TestMysqlSinker2_TransactionLifecycle(t *testing.T) {
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
 
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -315,7 +315,7 @@ func TestMysqlSinker2_TransactionLifecycle(t *testing.T) {
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
 
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -360,7 +360,7 @@ func TestMysqlSinker2_CommandProcessing(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	sinker := NewMysqlSinker2(
@@ -477,7 +477,7 @@ func TestMysqlSinker2_Reset(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	sinker := NewMysqlSinker2(
@@ -543,7 +543,7 @@ func TestMysqlSinker2_SendMethods(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	sinker := NewMysqlSinker2(
@@ -596,7 +596,7 @@ func TestMysqlSinker2_SendAfterClose_NoPanic(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	ar := NewCdcActiveRoutine()
@@ -651,7 +651,7 @@ func testMysqlSinker2CloseWhileSend(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	ar := NewCdcActiveRoutine()
@@ -727,7 +727,7 @@ func TestMysqlSinker2_ConsumerExitUnblocksAndRejectsCommands(t *testing.T) {
 				Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 				Name2ColIndex: map[string]int32{"id": 0},
 			}
-			builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+			builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 			require.NoError(t, err)
 
 			ar := NewCdcActiveRoutine()
@@ -820,7 +820,7 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 			Name2ColIndex: map[string]int32{"id": 0, "name": 1},
 		}
 
-		builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -878,7 +878,7 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 			Name2ColIndex: map[string]int32{"id": 0, "name": 1},
 		}
 
-		builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -932,7 +932,7 @@ func TestMysqlSinker2_SendCommandCleanupOnClose(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	t.Run("SendCommandAfterClose_CleansBatch", func(t *testing.T) {
@@ -1012,7 +1012,7 @@ func TestMysqlSinker2_SinkEarlyReturnCleansData(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	t.Run("SinkOnClosedSinker_CleansSnapshotData", func(t *testing.T) {

@@ -109,7 +109,7 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"select"}},
 			Name2ColIndex: map[string]int32{"select": 0, "a`b``c": 1},
 		}
-		builder, err := NewCDCStatementBuilder("库`名", "order", def, 1024, false)
+		builder, err := NewCDCStatementBuilder("库`名", "order", def, 1024, false, omitGeneratedContractFor(def))
 		require.NoError(t, err)
 		require.Equal(t, "INSERT INTO `库``名`.`order` (`select`,`a``b````c`) VALUES ", string(builder.insertStem))
 		require.Equal(t, " ON DUPLICATE KEY UPDATE `select`=VALUES(`select`),`a``b````c`=VALUES(`a``b````c`);", string(builder.insertSuffix))
@@ -129,7 +129,7 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			def := standardBuilderTableDef()
 			def.Indexes = tc.indexes
-			builder, err := NewCDCStatementBuilder("db", "users", def, 1024, true)
+			builder, err := NewCDCStatementBuilder("db", "users", def, 1024, true, omitGeneratedContractFor(def))
 			require.NoError(t, err)
 			if tc.replace {
 				require.Equal(t, "REPLACE INTO `db`.`users` (`id`,`name`) VALUES ", string(builder.insertStem))
@@ -146,7 +146,7 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 		def.Cols[0].Name, def.Cols[1].Name = "a`b", "名"
 		def.Pkey.Names = []string{"a`b", "名"}
 		def.Name2ColIndex = map[string]int32{"a`b": 0, "名": 1}
-		builder, err := NewCDCStatementBuilder("db", "t", def, 1024, false)
+		builder, err := NewCDCStatementBuilder("db", "t", def, 1024, false, omitGeneratedContractFor(def))
 		require.NoError(t, err)
 		require.Equal(t, "DELETE FROM `db`.`t` WHERE (`a``b`,`名`) IN (", string(builder.deleteStem))
 		require.Equal(t, 100, builder.EstimateDeleteRowSize())
@@ -186,7 +186,7 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 		{name: "nil index", def: &plan.TableDef{Cols: base.Cols, Pkey: base.Pkey, Name2ColIndex: base.Name2ColIndex, Indexes: []*plan.IndexDef{nil}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder, err := NewCDCStatementBuilder("db", "t", tc.def, 1024, false)
+			builder, err := NewCDCStatementBuilder("db", "t", tc.def, 1024, false, omitGeneratedContractFor(tc.def))
 			require.Error(t, err)
 			require.Nil(t, builder)
 		})
@@ -197,7 +197,7 @@ func TestCDCStatementBuilder_InsertExactSQLAndOwnership(t *testing.T) {
 	mp := newBuilderTestMPool(t)
 	def := standardBuilderTableDef()
 	def.Cols = append(def.Cols, &plan.ColDef{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}})
-	builder, err := NewCDCStatementBuilder("test_db", "users", def, ^uint64(0), false)
+	builder, err := NewCDCStatementBuilder("test_db", "users", def, ^uint64(0), false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	bat := directInsertBatch(t, mp, []int32{1, 2}, []string{"Alice", ""})
 	sqls, err := builder.BuildInsertSQL(context.Background(), bat, builderFromTS, builderToTS)
@@ -224,7 +224,7 @@ func TestCDCStatementBuilder_InsertNullTypesAndEscaping(t *testing.T) {
 		},
 		Pkey: &plan.PrimaryKeyDef{Names: []string{"u"}}, Name2ColIndex: map[string]int32{"u": 0, "s": 1, "b": 2, "f": 3},
 	}
-	builder, err := NewCDCStatementBuilder("db", "t", def, 4096, false)
+	builder, err := NewCDCStatementBuilder("db", "t", def, 4096, false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	bat := batch.NewWithSize(4)
 	bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)
@@ -262,7 +262,7 @@ func testInsertBoundsAndPostFlush(t *testing.T, useReplace bool) {
 	if useReplace {
 		def.Indexes = []*plan.IndexDef{{IndexName: "uk_name", Parts: []string{"name"}, Unique: true}}
 	}
-	probe, err := NewCDCStatementBuilder("db", "t", def, ^uint64(0), false)
+	probe, err := NewCDCStatementBuilder("db", "t", def, ^uint64(0), false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	one := directInsertBatch(t, mp, []int32{1}, []string{"small"})
 	oneSQL, err := probe.BuildInsertSQL(context.Background(), one, builderFromTS, builderToTS)
@@ -277,7 +277,7 @@ func testInsertBoundsAndPostFlush(t *testing.T, useReplace bool) {
 		{name: "zero", wantErr: true}, {name: "tiny", limit: v2SQLBufReserved, wantErr: true}, {name: "huge uint", limit: ^uint64(0)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder, buildErr := NewCDCStatementBuilder("db", "t", def, tc.limit, false)
+			builder, buildErr := NewCDCStatementBuilder("db", "t", def, tc.limit, false, omitGeneratedContractFor(def))
 			require.NoError(t, buildErr)
 			sqls, buildErr := builder.BuildInsertSQL(context.Background(), one, builderFromTS, builderToTS)
 			if tc.wantErr {
@@ -295,7 +295,7 @@ func testInsertBoundsAndPostFlush(t *testing.T, useReplace bool) {
 	largeSQL, err := probe.BuildInsertSQL(context.Background(), largeOnly, builderFromTS, builderToTS)
 	require.NoError(t, err)
 	splitLimit := uint64(len(largeSQL[0]))
-	builder, err := NewCDCStatementBuilder("db", "t", def, splitLimit, false)
+	builder, err := NewCDCStatementBuilder("db", "t", def, splitLimit, false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name  string
@@ -349,12 +349,12 @@ func (i *failingBuilderIterator) Close() { i.closed = true }
 
 func TestCDCStatementBuilder_IteratorErrorAfterFlushIsAtomic(t *testing.T) {
 	def := standardBuilderTableDef()
-	probe, err := NewCDCStatementBuilder("db", "t", def, ^uint64(0), false)
+	probe, err := NewCDCStatementBuilder("db", "t", def, ^uint64(0), false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	row, err := probe.formatInsertRow(context.Background(), []any{int32(1), []byte(strings.Repeat("x", 80))})
 	require.NoError(t, err)
 	limit := uint64(v2SQLBufReserved + len(probe.buildInsertPrefix(builderFromTS, builderToTS)) + len(row) + len(probe.insertSuffix))
-	builder, err := NewCDCStatementBuilder("db", "t", def, limit, false)
+	builder, err := NewCDCStatementBuilder("db", "t", def, limit, false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	iter := &failingBuilderIterator{offset: -1, rows: [][]any{{int32(1), []byte(strings.Repeat("x", 80))}, {int32(2), []byte(strings.Repeat("y", 80))}}}
 	sqls, err := builder.buildInsertSQL(context.Background(), iter, builderFromTS, builderToTS)
@@ -369,7 +369,7 @@ func TestCDCStatementBuilder_DeleteExactSQLCompositeAndBounds(t *testing.T) {
 		Cols: []*plan.ColDef{{Name: "key`word", Typ: plan.Type{Id: int32(types.T_varchar)}}},
 		Pkey: &plan.PrimaryKeyDef{Names: []string{"key`word"}}, Name2ColIndex: map[string]int32{"key`word": 0},
 	}
-	probe, err := NewCDCStatementBuilder("d`b", "表", singleDef, ^uint64(0), false)
+	probe, err := NewCDCStatementBuilder("d`b", "表", singleDef, ^uint64(0), false, omitGeneratedContractFor(singleDef))
 	require.NoError(t, err)
 	one := atomicStringBatch(t, mp, []string{"small"})
 	oneSQL, err := probe.BuildDeleteSQL(context.Background(), one, builderFromTS, builderToTS)
@@ -377,7 +377,7 @@ func TestCDCStatementBuilder_DeleteExactSQLCompositeAndBounds(t *testing.T) {
 	require.Equal(t, "/* [100-0, 200-0) */ DELETE FROM `d``b`.`表` WHERE `key``word` IN (('small'));", unpaddedSQL(oneSQL[0]))
 	exact := uint64(len(oneSQL[0]))
 	for _, delta := range []uint64{0, 1} {
-		builder, buildErr := NewCDCStatementBuilder("d`b", "表", singleDef, exact-delta, false)
+		builder, buildErr := NewCDCStatementBuilder("d`b", "表", singleDef, exact-delta, false, omitGeneratedContractFor(singleDef))
 		require.NoError(t, buildErr)
 		sqls, buildErr := builder.BuildDeleteSQL(context.Background(), one, builderFromTS, builderToTS)
 		if delta == 0 {
@@ -393,7 +393,7 @@ func TestCDCStatementBuilder_DeleteExactSQLCompositeAndBounds(t *testing.T) {
 	largeSQL, err := probe.BuildDeleteSQL(context.Background(), largeOnly, builderFromTS, builderToTS)
 	require.NoError(t, err)
 	limit := uint64(len(largeSQL[0]))
-	builder, err := NewCDCStatementBuilder("d`b", "表", singleDef, limit, false)
+	builder, err := NewCDCStatementBuilder("d`b", "表", singleDef, limit, false, omitGeneratedContractFor(singleDef))
 	require.NoError(t, err)
 	mixed := atomicStringBatch(t, mp, []string{"a", strings.Repeat("L", 100), "z"})
 	sqls, err := builder.BuildDeleteSQL(context.Background(), mixed, builderFromTS, builderToTS)
@@ -413,7 +413,7 @@ func TestCDCStatementBuilder_DeleteExactSQLCompositeAndBounds(t *testing.T) {
 		Cols: []*plan.ColDef{{Name: "order", Typ: plan.Type{Id: int32(types.T_int32)}}, {Name: "客户", Typ: plan.Type{Id: int32(types.T_int32)}}},
 		Pkey: &plan.PrimaryKeyDef{Names: []string{"order", "客户"}}, Name2ColIndex: map[string]int32{"order": 0, "客户": 1},
 	}
-	composite, err := NewCDCStatementBuilder("db", "t", compositeDef, 1024, true)
+	composite, err := NewCDCStatementBuilder("db", "t", compositeDef, 1024, true, omitGeneratedContractFor(compositeDef))
 	require.NoError(t, err)
 	packer := types.NewPacker()
 	packer.EncodeInt32(1)
@@ -446,7 +446,7 @@ func TestCDCStatementBuilder_DeleteExactSQLCompositeAndBounds(t *testing.T) {
 
 func TestCDCStatementBuilder_AtomicInsertOrderAndDedup(t *testing.T) {
 	mp := newBuilderTestMPool(t)
-	builder, err := NewCDCStatementBuilder("db", "t", standardBuilderTableDef(), 1024, false)
+	builder, err := NewCDCStatementBuilder("db", "t", standardBuilderTableDef(), 1024, false, omitGeneratedContractFor(standardBuilderTableDef()))
 	require.NoError(t, err)
 	atomic := NewAtomicBatch(mp)
 	t.Cleanup(atomic.Close)
@@ -464,7 +464,7 @@ func TestCDCStatementBuilder_AtomicInsertOrderAndDedup(t *testing.T) {
 
 func TestCDCStatementBuilder_EmptyInputs(t *testing.T) {
 	mp := newBuilderTestMPool(t)
-	builder, err := NewCDCStatementBuilder("db", "t", standardBuilderTableDef(), 0, false)
+	builder, err := NewCDCStatementBuilder("db", "t", standardBuilderTableDef(), 0, false, omitGeneratedContractFor(standardBuilderTableDef()))
 	require.NoError(t, err)
 	sqls, err := builder.BuildInsertSQL(context.Background(), nil, builderFromTS, builderToTS)
 	require.NoError(t, err)
@@ -498,7 +498,7 @@ func TestCDCStatementBuilder_BitInsertAndDelete(t *testing.T) {
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 		Name2ColIndex: map[string]int32{"id": 0, "b8": 1},
 	}
-	singleBuilder, err := NewCDCStatementBuilder("db", "bit_t", singleDef, 4096, false)
+	singleBuilder, err := NewCDCStatementBuilder("db", "bit_t", singleDef, 4096, false, omitGeneratedContractFor(singleDef))
 	require.NoError(t, err)
 
 	insertBat := batch.NewWithSize(2)
@@ -557,7 +557,7 @@ func TestCDCStatementBuilder_BitInsertAndDelete(t *testing.T) {
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"bpk", "spk"}},
 		Name2ColIndex: map[string]int32{"bpk": 0, "spk": 1},
 	}
-	compBuilder, err := NewCDCStatementBuilder("db", "comp_t", compDef, 4096, false)
+	compBuilder, err := NewCDCStatementBuilder("db", "comp_t", compDef, 4096, false, omitGeneratedContractFor(compDef))
 	require.NoError(t, err)
 
 	packer.Reset()

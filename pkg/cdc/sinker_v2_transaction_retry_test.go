@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"strings"
@@ -133,6 +134,219 @@ func (x abortedTargetTx) Rollback() error {
 	return nil
 }
 
+// signatureGuardTarget answers the REAL guarded identity and generation
+// signature routines with known rows and records every SQL statement seen on
+// the connection. The real mysqlSinker2 handleBegin runs against it, so the
+// projection fence is observed at its true owner instead of an injected
+// error: a disabled projection fence would let the mismatched signature
+// pass, BeginTransaction would succeed and the negative assertions below
+// would fail - the test is discriminating.
+type signatureGuardTarget struct {
+	mu           sync.Mutex
+	identity     uint64
+	sawIdentity  bool
+	sawSignature bool
+	signature    [][]driver.Value
+	begins       int
+	commits      int
+	rollbacks    int
+	exec         int
+	unknownSQL   []string
+}
+
+type signatureGuardConnector struct{ state *signatureGuardTarget }
+
+func (c signatureGuardConnector) Connect(context.Context) (driver.Conn, error) {
+	return &signatureGuardConn{state: c.state}, nil
+}
+func (c signatureGuardConnector) Driver() driver.Driver { return signatureGuardDriver{} }
+
+type signatureGuardDriver struct{}
+
+func (signatureGuardDriver) Open(string) (driver.Conn, error) { return nil, driver.ErrSkip }
+
+type signatureGuardConn struct{ state *signatureGuardTarget }
+
+func (*signatureGuardConn) Prepare(string) (driver.Stmt, error)      { return nil, driver.ErrSkip }
+func (*signatureGuardConn) Close() error                             { return nil }
+func (*signatureGuardConn) CheckNamedValue(*driver.NamedValue) error { return nil }
+func (c signatureGuardConn) Begin() (driver.Tx, error) {
+	c.state.begins++
+	return signatureGuardTx{state: c.state}, nil
+}
+
+func (c signatureGuardConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	switch {
+	case strings.Contains(query, "mo_cdc_target_identity"):
+		c.state.mu.Lock()
+		c.state.sawIdentity = true
+		c.state.mu.Unlock()
+		return &guardResultRows{cols: []string{"id"}, rows: [][]driver.Value{{c.state.identity}}}, nil
+	case strings.Contains(query, "mo_cdc_target_generation_signature"):
+		c.state.mu.Lock()
+		c.state.sawSignature = true
+		c.state.mu.Unlock()
+		return &guardResultRows{cols: []string{"column_ordinal", "column_name", "generation_class", "not_null", "typed_digest"}, rows: c.state.signature}, nil
+	}
+	c.state.mu.Lock()
+	c.state.unknownSQL = append(c.state.unknownSQL, query)
+	c.state.mu.Unlock()
+	return nil, fmt.Errorf("unexpected query: %s", query)
+}
+
+func (c signatureGuardConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	c.state.exec++
+	return guardExecResult{}, nil
+}
+
+type signatureGuardTx struct{ state *signatureGuardTarget }
+
+func (x signatureGuardTx) Commit() error {
+	x.state.commits++
+	return nil
+}
+func (x signatureGuardTx) Rollback() error {
+	x.state.rollbacks++
+	return nil
+}
+
+type guardExecResult struct{}
+
+func (guardExecResult) LastInsertId() (int64, error) { return 0, nil }
+func (guardExecResult) RowsAffected() (int64, error) { return 1, nil }
+
+type guardResultRows struct {
+	cols []string
+	rows [][]driver.Value
+	idx  int
+}
+
+func (r *guardResultRows) Columns() []string { return r.cols }
+func (r *guardResultRows) Close() error      { return nil }
+func (r *guardResultRows) Next(dest []driver.Value) error {
+	if r.idx >= len(r.rows) {
+		return io.EOF
+	}
+	copy(dest, r.rows[r.idx])
+	r.idx++
+	return nil
+}
+
+// TestSinkerGenerationFenceRejectedRangeIsNeverAckd drives the production
+// TransactionManager against a real mysqlSinker2 whose handleBegin observes
+// an actual mismatched generation signature on the sink transaction. The
+// rejected interval must leave the watermark owner untouched: no DML SQL is
+// executed, the sink transaction rolls back, COMMIT is never called and the
+// tracked watermark stays at the prior fromTs. The positive control feeds
+// the exact matching signature rows through the same real path and the
+// watermark advances to toTs through a real commit.
+func TestSinkerGenerationFenceRejectedRangeIsNeverAckd(t *testing.T) {
+	ordinary := [][]driver.Value{
+		{int64(0), "id", "O", int64(1), int64(7)},
+		{int64(1), "v", "O", int64(1), int64(8)},
+	}
+	mismatched := [][]driver.Value{
+		{int64(0), "id", "O", int64(1), int64(7)},
+		{int64(1), "v", "S", int64(1), int64(9)},
+	}
+
+	run := func(rows [][]driver.Value, expectFence bool) *signatureGuardTarget {
+		state := &signatureGuardTarget{identity: 42, signature: rows}
+		db := sql.OpenDB(signatureGuardConnector{state})
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		executor := &Executor{conn: db, retryTimes: 1, retryDuration: time.Minute}
+		executor.initRetryPolicy()
+		executor.retryPolicy.Backoff = nil
+		def := &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}}}, Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}}, Name2ColIndex: map[string]int32{"id": 0}}
+		builder, err := NewCDCStatementBuilder("sink", "t", def, 1024, false, omitGeneratedContractFor(def))
+		require.NoError(t, err)
+		ar := NewCdcActiveRoutine()
+		dbTbl := &DbTableInfo{
+			SourceDbName: "src", SourceTblName: "t",
+			SinkDbName: "sink", SinkTblName: "t",
+			TargetSinkType: CDCSinkType_MO,
+			TargetIdentity: "mo:42",
+			GenerationContract: &CDCTargetGenerationContract{
+				Copy:                []bool{true, true},
+				TargetClass:         []byte{CDCColumnOrdinary, CDCColumnOrdinary},
+				TargetNames:         []string{"id", "v"},
+				TargetDigest:        []uint64{7, 8},
+				ProjectionSensitive: true,
+			},
+		}
+		sinker := NewMysqlSinker2(executor, 1, "task", dbTbl, nil, builder, ar)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		t.Cleanup(cancel)
+		mp, err := mpool.NewMPool(t.Name(), 0, mpool.NoFixed)
+		require.NoError(t, err)
+		t.Cleanup(func() { mpool.DeleteMPool(mp) })
+		done := make(chan struct{})
+		go func() { defer close(done); sinker.Run(ctx, ar) }()
+		t.Cleanup(func() { sinker.Close(); cancel(); <-done })
+		updater := newMockWatermarkUpdater()
+		tm := NewTransactionManager(sinker, updater, 1, "task", "src", "t")
+		from, to := types.BuildTS(10, 0), types.BuildTS(20, 0)
+		updater.watermarks[updater.keyString(tm.watermarkKey)] = from
+
+		// The queue barrier may surface the fence at EITHER boundary the
+		// real owner owns: the caller's early BEGIN drain (a root-sanctioned
+		// legal outcome) or the first dispatch inside the batch's opened
+		// transaction. Both paths must leave identical rejected-range
+		// invariants: no DML SQL, no COMMIT, rollback, untouched watermark.
+		beginErr := tm.BeginTransaction(ctx, from, to)
+		if expectFence {
+			fenceErr := beginErr
+			if fenceErr == nil {
+				sinker.sendCommand(NewInsertBatchCommand(buildBatch(t, mp, []int32{1}, to), mp, from, to))
+				sinker.SendDummy()
+				fenceErr = sinker.Error()
+			}
+			require.ErrorContains(t, fenceErr, "changed schema without being replaced",
+				"the real guarded revalidation must fence the mismatched signature before any write")
+			commitErr := tm.CommitTransaction(ctx)
+			if commitErr != nil {
+				require.ErrorContains(t, commitErr, "changed schema without being replaced",
+					"a sticky fence never admits the rejected range to the watermark owner")
+			}
+			require.NoError(t, tm.EnsureCleanup(ctx))
+			state.mu.Lock()
+			commits, execs, rollbacks, begins, unknown := state.commits, state.exec, state.rollbacks, state.begins, append([]string(nil), state.unknownSQL...)
+			state.mu.Unlock()
+			require.Zero(t, commits, "a rejected range must never call COMMIT")
+			require.Zero(t, execs, "a rejected range must execute no DML SQL")
+			require.Empty(t, unknown, "only the guarded routines may be read")
+			require.GreaterOrEqual(t, rollbacks, 1, "the fenced sink transaction must roll back")
+			require.GreaterOrEqual(t, begins, 1)
+			require.True(t, state.sawIdentity, "the real identity guard must observe the live table ID")
+			require.True(t, state.sawSignature, "the real signature read must observe the drifted rows")
+			require.False(t, updater.updateCalled, "the watermark owner must not be reached for the rejected toTs")
+			require.Equal(t, from, updater.watermarks[updater.keyString(tm.watermarkKey)],
+				"the tracked watermark must stay at the prior interval start")
+			return state
+		}
+
+		require.NoError(t, beginErr, "the exact matching signature must pass the real guarded begin")
+		sinker.sendCommand(NewInsertBatchCommand(buildBatch(t, mp, []int32{1}, to), mp, from, to))
+		sinker.SendDummy()
+		require.NoError(t, sinker.Error(), "the real DML path must succeed for a matching signature")
+		require.NoError(t, tm.CommitTransaction(ctx))
+		state.mu.Lock()
+		commits, execs := state.commits, state.exec
+		state.mu.Unlock()
+		require.GreaterOrEqual(t, execs, 1, "the matching signature must reach real DML SQL")
+		require.GreaterOrEqual(t, commits, 1, "a matching range commits through the real path")
+		require.True(t, state.sawIdentity, "the matching control also observes the live identity read")
+		require.True(t, state.sawSignature, "the matching control also observes the signature read")
+		require.True(t, updater.updateCalled, "a matching range acks through the real watermark owner")
+		require.Equal(t, to, updater.watermarks[updater.keyString(tm.watermarkKey)],
+			"the watermark must advance to the committed interval")
+		return state
+	}
+
+	run(mismatched, true)
+	run(ordinary, false)
+}
+
 func TestMysqlSinkerTransactionErrorReplaysWholeRange(t *testing.T) {
 	for _, backend := range []string{"production", "upstream"} {
 		for _, fault := range []struct {
@@ -159,7 +373,7 @@ func TestMysqlSinkerTransactionErrorReplaysWholeRange(t *testing.T) {
 					executor.initRetryPolicy()
 					executor.retryPolicy.Backoff = nil
 					def := &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}}}, Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}}, Name2ColIndex: map[string]int32{"id": 0}}
-					builder, err := NewCDCStatementBuilder("sink", "t", def, 1024, false)
+					builder, err := NewCDCStatementBuilder("sink", "t", def, 1024, false, omitGeneratedContractFor(def))
 					require.NoError(t, err)
 					ar := NewCdcActiveRoutine()
 					sinker := NewMysqlSinker2(executor, 1, "task", &DbTableInfo{SourceDbName: "src", SourceTblName: "t"}, nil, builder, ar)

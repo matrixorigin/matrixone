@@ -296,9 +296,25 @@ func createMysqlSinker2(
 				executor.Close()
 				return nil, rollbackErr
 			}
-		} else if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
-			executor.Close()
-			return nil, err
+		} else {
+			// The guarded metadata reads - including the generation
+			// signature call - require an explicit transaction on the lock
+			// connection, never an autocommit pool.
+			verifyTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+			if beginErr != nil {
+				executor.Close()
+				return nil, beginErr
+			}
+			err = verifyCDCTargetTableWithQuery(ctx, verifyTx, dbTblInfo, tableDef, sinkUri.SinkTyp)
+			verifyRollbackErr := verifyTx.Rollback()
+			if err != nil {
+				executor.Close()
+				return nil, err
+			}
+			if verifyRollbackErr != nil {
+				executor.Close()
+				return nil, verifyRollbackErr
+			}
 		}
 	}
 
@@ -339,9 +355,20 @@ func createMysqlSinker2(
 			}
 		}
 		if ownerFence != nil && dbTblInfo.targetIdentityAck == nil {
-			if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
+			verifyTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+			if beginErr != nil {
+				executor.Close()
+				return nil, beginErr
+			}
+			err = verifyCDCTargetTableWithQuery(ctx, verifyTx, dbTblInfo, tableDef, sinkUri.SinkTyp)
+			verifyRollbackErr := verifyTx.Rollback()
+			if err != nil {
 				executor.Close()
 				return nil, err
+			}
+			if verifyRollbackErr != nil {
+				executor.Close()
+				return nil, verifyRollbackErr
 			}
 		}
 		if dbTblInfo.targetIdentityAck != nil {
@@ -380,12 +407,27 @@ func createMysqlSinker2(
 	}
 
 	// 4. Create SQL Statement Builder
+	builderContract := dbTblInfo.GenerationContract
+	if builderContract == nil {
+		// Legacy unverified creation may proceed without a target observation
+		// only when the projection provably uses no generated source slot. An
+		// unobserved generated slot has no value-copy proof and fails closed
+		// before any write or acknowledgement, never silently omitted.
+		if CDCSourceHasGeneratedColumn(tableDef.Cols) {
+			executor.Close()
+			return nil, moerr.NewInternalErrorf(ctx,
+				"CDC target %s.%s has no observed generation contract while the source defines generated columns: explicit target verification or a generated-free mapping is required",
+				dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+		}
+		builderContract = CDCOmitGeneratedContractFor(tableDef)
+	}
 	builder, err := NewCDCStatementBuilder(
 		dbTblInfo.SinkDbName,
 		dbTblInfo.SinkTblName,
 		tableDef,
 		maxSqlLength,
 		sinkUri.SinkTyp == CDCSinkType_MO,
+		builderContract,
 	)
 	if err != nil {
 		executor.Close()
@@ -419,6 +461,457 @@ func createMysqlSinker2(
 	)
 
 	return sinker, nil
+}
+
+// CDCGeneratedExprFirstOrdinal returns the visibility ordinal of the first
+// source-generated column, or -1 when the mapping is entirely generated
+// free.
+func CDCGeneratedExprFirstOrdinal(visible []*plan.ColDef) int32 {
+	first := int32(-1)
+	for i, col := range visible {
+		if col != nil && col.GetGeneratedCol() != nil {
+			first = int32(i)
+			break
+		}
+	}
+	// int32(-1) may also encode "no generated column"; the loop keeps the
+	// first found ordinal below.
+	for i, col := range visible {
+		if col != nil && col.GetGeneratedCol() != nil {
+			return int32(i)
+		}
+	}
+	return first
+}
+
+// CopyDecodeSupported pins the typed conversions the row extractor and SQL
+// renderer provably complete for a replicated source value written into an
+// ordinary writable target column. Generated slots outside this set are
+// fenced at admission with their own error instead of failing mid-stream.
+func CopyDecodeSupported(t types.T) bool {
+	switch t {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_date, types.T_datetime, types.T_timestamp:
+		return true
+	// The whole float family is named explicitly. The low-precision members
+	// complete the same proven pipeline the ordinary floats use: the row
+	// extractor decodes them through vector.GetLowPrecisionFloatAt and the
+	// SQL renderer emits their exact float text, both witnessed by
+	// TestLowPrecisionFloatColumnSQL. Given the last member its own case
+	// keeps a later float type from being read as another entry here.
+	case types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8:
+		return true
+	case types.T_float4:
+		return true
+	}
+	return false
+}
+
+// CDCOmitGeneratedContractFor builds the committed-admission-style contract
+// that omits every source-generated column and copies every ordinary column.
+// External fixtures and tests use it to pass the exact contract shape the
+// admission verifier captures for a proven generated target.
+func CDCOmitGeneratedContractFor(tableDef *plan.TableDef) *CDCTargetGenerationContract {
+	contract := &CDCTargetGenerationContract{}
+	if tableDef == nil {
+		return contract
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
+		if _, internal := catalog.InternalColumns[col.Name]; internal || col.Hidden {
+			continue
+		}
+		contract.Copy = append(contract.Copy, col.GetGeneratedCol() == nil)
+	}
+	return contract
+}
+
+// classifyCDCTargetGeneration builds the per-visible-column W/G contract from
+// observed target metadata, inside the caller's admission verify transaction.
+// Ordinary writable target columns always copy the source materialized value
+// (including a source-generated slot: merge-base parity). A target generated
+// column admits omission only for a known MO generated target whose typed
+// bound expression, names/ordinals, types, nullability and STORED/VIRTUAL kind
+// are proven compatible on both ends; everything else fails closed before any
+// DML or acknowledgement, with the bounded alternatives stated in the error.
+func classifyCDCTargetGeneration(
+	ctx context.Context,
+	queryer interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	},
+	info *DbTableInfo,
+	sinkType string,
+	visible []*plan.ColDef,
+) (*CDCTargetGenerationContract, error) {
+	contract := &CDCTargetGenerationContract{
+		Copy:         make([]bool, len(visible)),
+		TargetClass:  make([]byte, len(visible)),
+		TargetNames:  make([]string, len(visible)),
+		TargetDigest: make([]uint64, len(visible)),
+	}
+	// The only same-admission provenance that truly establishes the current
+	// schema is the guarded identity observation of an ABSENT target
+	// (TargetPreIdentity == absentCDCTargetIdentity): this admission observed
+	// no table and this sink materialized the schema itself. Every other
+	// empty-preid path must fall through to the guarded metadata read: a
+	// durable resume passes targetReady with the recorded identity and skips
+	// CREATE entirely, and legacy CREATE IF NOT EXISTS is not an exclusive
+	// creation. A resumed or attached target is thereby proven ordinary, and
+	// a generated or unknown target column fails closed before the mapping
+	// Conditional routing governs the guarded generation authority: every
+	// source-generated mapping reads the strict typed guarded signature in
+	// the caller's already-held verify transaction and keeps per-DML
+	// revalidation; every generation-free mapping proves ordinary positively
+	// through the object-privileged guarded SHOW metadata (live catalog
+	// attributes, never a historical view template) at zero per-DML cost.
+	// Denied, absent, unknown, incomplete, ambiguous or generated metadata
+	// fails closed before the first acknowledgement.
+	if sinkType == CDCSinkType_MO {
+		// Conditional routing before the first acknowledgement: a
+		// GENERATION-FREE source needs only positive ordinary proof, and the
+		// guarded SHOW metadata - object-privileged (#30304), rendered from
+		// the live catalog attributes rather than any historical view
+		// template - provides it through the same already-held verify
+		// transaction with unchanged grants. Every source-generated mapping
+		// keeps the strict typed guarded signature and its per-DML
+		// revalidation. Denied, absent, unknown, incomplete, ambiguous or
+		// generated SHOW states fail closed before the first acknowledgement.
+		if !CDCSourceHasGeneratedColumn(visible) {
+			return classifyShowColumnsOrdinary(ctx, queryer, info, visible, contract)
+		}
+		rows, err := queryer.QueryContext(ctx, fmt.Sprintf(
+			"CALL mo_cdc_target_generation_signature('%s', '%s')",
+			escapeSQLString(info.SinkDbName), escapeSQLString(info.SinkTblName)))
+		if err != nil {
+			return nil, retryableCDCTargetMetadataError(err)
+		}
+		// Bounded duplicate detection: a second row for one ordinal is
+		// malformed metadata and fails closed, never last-write-wins.
+		reported := make([]bool, len(visible))
+		for rows.Next() {
+			var ordinal int64
+			var name, class string
+			var notNull, digest int64
+			if err = rows.Scan(&ordinal, &name, &class, &notNull, &digest); err != nil {
+				break
+			}
+			if ordinal < 0 || int64(int(ordinal)) != ordinal || int(ordinal) >= len(visible) {
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s reported generation ordinal %d outside the column layout",
+					info.SinkDbName, info.SinkTblName, ordinal)
+				break
+			}
+			if reported[ordinal] {
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s reported duplicate generation metadata for column %d",
+					info.SinkDbName, info.SinkTblName, ordinal+1)
+				break
+			}
+			reported[ordinal] = true
+			switch class {
+			case string(CDCColumnOrdinary), string(CDCColumnGeneratedStored), string(CDCColumnGeneratedVirt):
+			default:
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s reported an unknown generation class %q",
+					info.SinkDbName, info.SinkTblName, class)
+			}
+			if err == nil && name != visible[ordinal].GetOriginCaseName() {
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d generation metadata name %q differs from the admission verify",
+					info.SinkDbName, info.SinkTblName, ordinal+1, name)
+			}
+			if err != nil {
+				break
+			}
+			contract.TargetClass[ordinal] = class[0]
+			contract.TargetDigest[ordinal] = uint64(digest)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		closeErr := rows.Close() //nolint:sqlclosecheck // Checked below before the per-column decisions.
+		if err != nil {
+			return nil, retryableCDCTargetMetadataError(err)
+		}
+		if closeErr != nil {
+			return nil, retryableCDCTargetMetadataError(closeErr)
+		}
+	} else {
+		rows, err := queryer.QueryContext(ctx,
+			"SELECT column_name, extra FROM information_schema.columns "+
+				"WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
+			info.SinkDbName, info.SinkTblName)
+		if err != nil {
+			return nil, retryableCDCTargetMetadataError(err)
+		}
+		ordinal := 0
+		for rows.Next() {
+			var layoutName string
+			var extra sql.NullString
+			if err = rows.Scan(&layoutName, &extra); err != nil {
+				break
+			}
+			if ordinal >= len(visible) {
+				ordinal++
+				continue
+			}
+			contract.TargetNames[ordinal] = layoutName
+			contract.TargetClass[ordinal] = CDCColumnOrdinary
+			if !extra.Valid {
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d has unavailable generation metadata",
+					info.SinkDbName, info.SinkTblName, ordinal+1)
+				break
+			}
+			// MySQL EXTRA must be decoded precisely: only VIRTUAL GENERATED or
+			// STORED GENERATED are computed by the table. DEFAULT_GENERATED
+			// marks an ordinary writable expression-default column and stays
+			// copyable; an ordinary empty EXTRA stays copyable too.
+			upper := strings.ToUpper(extra.String)
+			switch {
+			case strings.Contains(upper, "VIRTUAL GENERATED"):
+				contract.TargetClass[ordinal] = CDCColumnGeneratedVirt
+			case strings.Contains(upper, "STORED GENERATED"):
+				contract.TargetClass[ordinal] = CDCColumnGeneratedStored
+			}
+			ordinal++
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		closeErr := rows.Close() //nolint:sqlclosecheck // Checked below before the per-column decisions.
+		if err != nil {
+			return nil, retryableCDCTargetMetadataError(err)
+		}
+		if closeErr != nil {
+			return nil, retryableCDCTargetMetadataError(closeErr)
+		}
+		if ordinal != len(visible) {
+			return nil, moerr.NewInternalErrorf(ctx, "CDC target %s.%s has %d generation metadata rows; expected %d",
+				info.SinkDbName, info.SinkTblName, ordinal, len(visible))
+		}
+	}
+	for i := range visible {
+		if contract.TargetClass[i] == 0 && contract.TargetDigest[i] == 0 {
+			return nil, moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d has no generation metadata; the target schema is incomplete or denied",
+				info.SinkDbName, info.SinkTblName, i+1)
+		}
+	}
+	firstGenerated := CDCGeneratedExprFirstOrdinal(visible)
+	for i, col := range visible {
+		gen := col.GetGeneratedCol()
+		if contract.TargetClass[i] == CDCColumnOrdinary {
+			if gen == nil {
+				contract.Copy[i] = true
+				continue
+			}
+			if !CopyDecodeSupported(types.T(col.Typ.Id)) {
+				return nil, moerr.NewInternalErrorf(ctx,
+					"CDC target %s.%s column %s is writable, but its generated payload type cannot be decoded for replication; pre-create an ordinary column of a supported type",
+					info.SinkDbName, info.SinkTblName, col.GetOriginCaseName())
+			}
+			contract.Copy[i] = true
+			continue
+		}
+		if gen == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"CDC target %s.%s column %s is generated while the source column is not; a generated target column cannot receive a replicated value: pre-create an ordinary writable column instead",
+				info.SinkDbName, info.SinkTblName, col.GetOriginCaseName())
+		}
+		if sinkType != CDCSinkType_MO {
+			return nil, moerr.NewNotSupportedf(ctx,
+				"CDC target %s.%s column %s is generated on this backend; generated recomputation is not supported until typed equivalence is proven: pre-create an ordinary writable column instead",
+				info.SinkDbName, info.SinkTblName, col.GetOriginCaseName())
+		}
+		srcStored := gen.GetIsStored()
+		dstStored := contract.TargetClass[i] == CDCColumnGeneratedStored
+		if srcStored != dstStored {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"CDC target %s.%s column %s generation kind differs from the source: pre-create an ordinary writable column instead",
+				info.SinkDbName, info.SinkTblName, col.GetOriginCaseName())
+		}
+		if !CDCGeneratedExprSafe(gen, firstGenerated, types.T(col.Typ.Id)) {
+			return nil, moerr.NewNotSupportedf(ctx,
+				"CDC target %s.%s column %s has a session-context dependent generated expression that cannot be reproduced at the target: pre-create an ordinary writable column of the same type instead [%s]",
+				info.SinkDbName, info.SinkTblName, col.GetOriginCaseName(),
+				CDCGeneratedExprStructure(gen.GetExpr(), 0))
+		}
+		// The source side must render a complete canonical image before the
+		// equality test: a truncated or unhandled node fails closed instead
+		// of aliasing into the captured target digest.
+		sourceDigest, sourceComplete := CDCColumnTypedDigestFromColDef(col, int32(i))
+		if !sourceComplete {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"CDC target %s.%s column %s generated expression cannot be canonicalized: the source bound tree is truncated or contains an unhandled node: pre-create an ordinary writable column instead",
+				info.SinkDbName, info.SinkTblName, col.GetOriginCaseName())
+		}
+		if sourceDigest != contract.TargetDigest[i] {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"CDC target %s.%s column %s generated expression differs from the source: pre-create an ordinary writable column instead",
+				info.SinkDbName, info.SinkTblName, col.GetOriginCaseName())
+		}
+		contract.Copy[i] = false
+	}
+	for i, copy := range contract.Copy {
+		if !copy {
+			contract.GeneratedOrdinals = append(contract.GeneratedOrdinals, int32(i))
+		}
+	}
+	// Projection-sensitive covers every schema-dependent mapping, not only
+	// admitted omissions: a copied source-generated slot (W) drifts the same
+	// way when the target layout changes, and mixed maps depend on ordinary
+	// operand columns too. Only mappings with no source-generated and no
+	// target-generated column keep the plain per-transaction identity cost.
+	contract.ProjectionSensitive = false
+	for i, col := range visible {
+		if col.GetGeneratedCol() != nil || contract.TargetClass[i] != CDCColumnOrdinary {
+			contract.ProjectionSensitive = true
+			break
+		}
+	}
+	return contract, nil
+}
+
+// revalidateCDCTargetGeneration is the per-DML transaction fence: it re-reads
+// the target's guarded generation signature on the caller's sinker
+// transaction (the exact call family an INSERT-only role may invoke) and
+// compares the captured contract. It runs after the target identity guard has
+// taken the same catalog name locks as DDL and advanced the snapshot.
+func revalidateCDCTargetGeneration(ctx context.Context, tx *sql.Tx, info *DbTableInfo) error {
+	if tx == nil || info == nil || info.GenerationContract == nil || !info.GenerationContract.ProjectionSensitive {
+		return nil
+	}
+	if info.TargetSinkType != CDCSinkType_MO {
+		// Backend-appropriate evidence for a copied ordinary layout: inside
+		// the same sinker transaction the catalog layout is re-read and must
+		// hold the admitted names and generation classes exactly. Duplicates,
+		// shorts, drifts or unavailable metadata all fail closed before any
+		// write of this batch.
+		rows, qErr := tx.QueryContext(ctx,
+			"SELECT column_name, extra FROM information_schema.columns "+
+				"WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
+			info.SinkDbName, info.SinkTblName)
+		if qErr != nil {
+			return moerr.NewInternalErrorf(ctx, "CDC target %s.%s generation layout revalidation failed: %v",
+				info.SinkDbName, info.SinkTblName, qErr)
+		}
+		width := len(info.GenerationContract.Copy)
+		seen := make([]bool, width)
+		columns := 0
+		var err error
+		for rows.Next() {
+			var layoutName string
+			var extra sql.NullString
+			if err = rows.Scan(&layoutName, &extra); err != nil {
+				break
+			}
+			if columns >= width || layoutName != info.GenerationContract.TargetNames[columns] {
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s reported an unexpected column layout at position %d",
+					info.SinkDbName, info.SinkTblName, columns+1)
+				break
+			}
+			if !extra.Valid {
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d has unavailable generation metadata",
+					info.SinkDbName, info.SinkTblName, columns+1)
+				break
+			}
+			upperLayout := strings.ToUpper(extra.String)
+			class := CDCColumnOrdinary
+			switch {
+			case strings.Contains(upperLayout, "VIRTUAL GENERATED"):
+				class = CDCColumnGeneratedVirt
+			case strings.Contains(upperLayout, "STORED GENERATED"):
+				class = CDCColumnGeneratedStored
+			}
+			if class != info.GenerationContract.TargetClass[columns] {
+				err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %s changed generation class",
+					info.SinkDbName, info.SinkTblName, layoutName)
+				break
+			}
+			seen[columns] = true
+			columns++
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		closeErr := rows.Close() //nolint:sqlclosecheck // Checked below before the mismatch fence.
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "CDC target %s.%s generation layout revalidation failed: %v",
+				info.SinkDbName, info.SinkTblName, err)
+		}
+		for i := 0; i < width; i++ {
+			if !seen[i] {
+				return moerr.NewInternalErrorf(ctx,
+					"CDC target %s.%s generation layout revalidation is incomplete: %d of %d columns reported",
+					info.SinkDbName, info.SinkTblName, columns, width)
+			}
+		}
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(
+		"CALL mo_cdc_target_generation_signature('%s', '%s')",
+		escapeSQLString(info.SinkDbName), escapeSQLString(info.SinkTblName)))
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "CDC target %s.%s generation signature revalidation failed: %v",
+			info.SinkDbName, info.SinkTblName, err)
+	}
+	// Fixed-width, bounded state: no ordinal-driven growth. Every malformed
+	// input fails closed - short, duplicate, out-of-range, empty or unknown
+	// metadata never reaches a padded match.
+	width := len(info.GenerationContract.Copy)
+	class := make([]byte, width)
+	digest := make([]uint64, width)
+	seen := make([]bool, width)
+	columns := 0
+	for rows.Next() {
+		var ordinal int64
+		var name, classText string
+		var notNull, digestValue int64
+		if err = rows.Scan(&ordinal, &name, &classText, &notNull, &digestValue); err != nil {
+			break
+		}
+		if ordinal < 0 || int64(int(ordinal)) != ordinal || int(ordinal) >= width || len(classText) != 1 {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s reported malformed generation metadata (ordinal %d, class %q)",
+				info.SinkDbName, info.SinkTblName, ordinal, classText)
+			break
+		}
+		if seen[ordinal] {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s reported duplicate generation metadata for column %d",
+				info.SinkDbName, info.SinkTblName, ordinal+1)
+			break
+		}
+		seen[ordinal] = true
+		class[ordinal] = classText[0]
+		digest[ordinal] = uint64(digestValue)
+		columns++
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	closeErr := rows.Close() //nolint:sqlclosecheck // Checked below before the mismatch error.
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "CDC target %s.%s generation signature revalidation failed: %v",
+			info.SinkDbName, info.SinkTblName, err)
+	}
+	if columns != width {
+		return moerr.NewInternalErrorf(ctx,
+			"CDC target %s.%s generation signature revalidation is incomplete: %d of %d columns reported",
+			info.SinkDbName, info.SinkTblName, columns, width)
+	}
+	if !CDCContractMatchesSignature(info.GenerationContract, class, digest) {
+		return moerr.NewInternalErrorf(ctx,
+			"CDC target %s.%s changed schema without being replaced; explicit recovery is required before any further DML",
+			info.SinkDbName, info.SinkTblName)
+	}
+	return nil
 }
 
 func verifyCDCTargetTable(
@@ -501,6 +994,11 @@ func verifyCDCTargetTableWithQuery(
 		return moerr.NewInternalErrorf(ctx, "CDC target %s.%s has %d columns; expected %d",
 			info.SinkDbName, info.SinkTblName, columnCount, len(visible))
 	}
+	contract, err := classifyCDCTargetGeneration(ctx, queryer, info, sinkType, visible)
+	if err != nil {
+		return err
+	}
+	info.GenerationContract = contract
 
 	indexRows, err := queryer.QueryContext(ctx,
 		"SELECT index_name, non_unique, seq_in_index, column_name, sub_part FROM information_schema.statistics "+
@@ -635,8 +1133,19 @@ func VerifyOwnedTarget(
 		if rollbackErr != nil {
 			return rollbackErr
 		}
-	} else if err = verifyCDCTargetTable(ctx, executor, info, tableDef, sinkUri.SinkTyp); err != nil {
-		return err
+	} else {
+		verifyTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+		if beginErr != nil {
+			return beginErr
+		}
+		err = verifyCDCTargetTableWithQuery(ctx, verifyTx, info, tableDef, sinkUri.SinkTyp)
+		verifyRollbackErr := verifyTx.Rollback()
+		if err != nil {
+			return err
+		}
+		if verifyRollbackErr != nil {
+			return verifyRollbackErr
+		}
 	}
 	if err = fence.Check(ctx); err != nil {
 		return err
@@ -924,6 +1433,18 @@ func (s *mysqlSinker2) handleBegin(ctx context.Context) (resultErr error) {
 			_ = s.executor.RollbackTx(ctx)
 			return err
 		}
+	}
+	// Projection-sensitive mappings revalidate the captured generation
+	// contract on this same DML transaction, after the identity guard has
+	// taken the same catalog name locks as DDL and advanced its snapshot,
+	// and strictly before any row SQL is dispatched.
+	if err := revalidateCDCTargetGeneration(ctx, s.executor.tx, s.dbTblInfo); err != nil {
+		v2.CdcSinkerTransactionCounter.WithLabelValues("revalidate", "error").Inc()
+		logutil.Error("cdc.mysql_sinker2.generation_contract_fence",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Error(err))
+		_ = s.executor.RollbackTx(ctx)
+		return err
 	}
 
 	// Update state
