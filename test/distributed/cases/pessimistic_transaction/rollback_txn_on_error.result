@@ -120,6 +120,7 @@ set mo_rollback_txn_on_error = 1;
 delete from t;
 insert into t values (1, 'one');
 begin;
+insert into t values (69, 'first');
 insert into t values (70, 'seventy');
 selec 1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "selec 1;";

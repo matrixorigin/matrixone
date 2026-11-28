@@ -6021,9 +6021,7 @@ func executeStmtWithWorkspace(ses FeSession,
 		if finishTxnOnReturn {
 			err = finishTxnFunc(ses, err, execCtx)
 		}
-		if owner, ok := ses.(*Session); ok && owner.GetTxnHandler().GetTxn() == nil {
-			owner.cleanupRetiredTempTables(execCtx.reqCtx)
-		}
+		cleanupRetiredTempTablesAfterTxn(ses, execCtx)
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -6547,18 +6545,28 @@ func countUpdateChangedRows(ses *Session) bool {
 // guard below makes this a no-op for the errors finishTxnFunc handled, rather
 // than rolling back twice.
 func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr error) {
-	if !sessionRollsBackTxnOnError(ses, retErr) {
+	if !sessionRollsBackTxnOnError(ses, retErr) || isTxnCommitResultUnknown(retErr) {
 		return
 	}
 	txnHandler := ses.GetTxnHandler()
 	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
 		return
 	}
+	// The failed request may have no statement boundary of its own. A
+	// statement rollback here can rewind the preceding successful statement.
+	execCtx.txnOpt.byRollback = true
 	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
 		// The statement's own error is what the client asked about; a failure
 		// to roll back is logged, not substituted for it.
 		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
 			zap.Error(rbErr), zap.Error(retErr))
+	}
+	cleanupRetiredTempTablesAfterTxn(ses, execCtx)
+}
+
+func cleanupRetiredTempTablesAfterTxn(ses FeSession, execCtx *ExecCtx) {
+	if owner, ok := ses.(*Session); ok && owner.GetTxnHandler().GetTxn() == nil {
+		owner.cleanupRetiredTempTables(execCtx.reqCtx)
 	}
 }
 
@@ -6688,7 +6696,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		markRowCountFailed(ses, proc)
 
-		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
+		// Binary CLOSE uses an internal DEALLOCATE and sends no statement error
+		// to the client. Its early cleanup errors do not own the user's transaction.
+		if ses.GetCmd() != COM_STMT_CLOSE {
+			rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
+		}
 	}()
 
 	if ses.GetTenantInfo() != nil {
@@ -7512,6 +7524,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}()
 	}
 
+	// These rejections occur before doComQuery can apply the session error policy.
+	preExecutionError := func(cause error) *Response {
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, cause)
+		return NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), cause)
+	}
 	var sql string
 	ses.Debugf(execCtx.reqCtx, "cmd %v", req.GetCmd())
 	ses.SetCmd(req.GetCmd())
@@ -7530,7 +7547,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if rewriteErr != nil {
 			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+			resp = preExecutionError(rewriteErr)
 			return resp, nil
 		}
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
@@ -7591,7 +7608,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			if rewriteErr != nil {
 				ses.beginWarningDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
-				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				resp = preExecutionError(rewriteErr)
 				return resp, nil
 			}
 			if rewritePolicy.enabled {
@@ -7601,7 +7618,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
 			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+			resp = preExecutionError(err)
 			return resp, nil
 		}
 		ses.addSqlCount(1)
@@ -7642,7 +7659,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			// This parse failure never reaches doComQuery, so the error defer there
 			// does not run; set the state explicitly here.
 			markRowCountFailed(ses, ses.GetProc())
-			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
+			return preExecutionError(err), nil
 		}
 		cursorRequested := prepareStmt.cursorRequested
 		// A new execute invalidates any rows retained by the previous cursor,
@@ -7653,8 +7670,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 				ses.beginWarningDiagnostics()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 				markRowCountFailed(ses, ses.GetProc())
-				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),
-					moerr.NewNotSupported(execCtx.reqCtx, "server-side cursors require a SELECT statement")), nil
+				return preExecutionError(moerr.NewNotSupported(execCtx.reqCtx, "server-side cursors require a SELECT statement")), nil
 			}
 		}
 		if cursorRequested {
