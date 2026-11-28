@@ -762,16 +762,15 @@ func TestServerConn_HandleHandshakeClearsReadDeadline(t *testing.T) {
 
 	sc, err := newServerConn(cn, nil, tp.re, 0)
 	require.NoError(t, err)
-	impl := sc.(*serverConn)
-	defer impl.Close()
+	defer sc.Close()
 
 	// Replace the transport in both serverConn and its frontend protocol so
 	// the test can observe the deadline left by the handshake reads.
-	tracked := &readDeadlineTrackingConn{Conn: impl.conn}
-	impl.conn = tracked
-	impl.mysqlProto.UseConn(tracked)
+	tracked := &readDeadlineTrackingConn{Conn: sc.conn}
+	sc.conn = tracked
+	sc.mysqlProto.UseConn(tracked)
 
-	_, err = impl.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, 3*time.Second)
+	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, 3*time.Second)
 	require.NoError(t, err)
 	require.True(t, tracked.readDeadline().IsZero(),
 		"the frontend handshake deadline must not survive into the tunnel")
@@ -849,21 +848,26 @@ func TestRouter_BackendHandshakeConnectionID(t *testing.T) {
 		}
 	}
 
-	t.Run("zero ID mismatch preserves old registration", func(t *testing.T) {
+	t.Run("zero ID mismatch on same CN preserves source registration", func(t *testing.T) {
 		core, logs := observer.New(zapcore.WarnLevel)
 		manager := newConnManager()
 		re := &rebalancer{connManager: manager, diagnosticLogger: logutil.NewRateLimitedLogger(zap.New(core))}
 		r := newRouter(nil, re, manager, false, withAuthTimeout(authTimeout),
 			withCNHealthCheckFailThreshold(1)).(*router)
 		tun := newTunnel(t.Context(), runtime.DefaultRuntime().Logger(), nil)
-		oldCN := &CNServer{uuid: "old"}
+		addr, observed := startBackend(t, "bad", true)
+		network, sourceAddr, err := parseProxyAddress(addr)
+		require.NoError(t, err)
+		require.Equal(t, "unix", network)
+		// The live socket exposes the bare path, while routing sees the URL.
+		require.NotEqual(t, addr, sourceAddr)
+		oldCN := &CNServer{uuid: "source", addr: sourceAddr}
 		old := &serverConn{cnServer: oldCN, rebalancer: re}
 		old.tunnelOwner.tun = tun
-		manager.connect(oldCN, tun)
+		old.registerTunnel()
 		t.Cleanup(func() { require.NoError(t, old.Close()) })
 
-		addr, observed := startBackend(t, "bad", true)
-		bad := &CNServer{uuid: "bad", addr: addr, salt: testSlat}
+		bad := &CNServer{uuid: oldCN.uuid, addr: addr, salt: testSlat}
 		require.Same(t, bad, manager.selectOne(bad.hash, []*CNServer{bad}))
 		require.Equal(t, 2, manager.count())
 		sc, response, err := r.ConnectRouteSelected(bad, testPacket, tun)
@@ -884,6 +888,9 @@ func TestRouter_BackendHandshakeConnectionID(t *testing.T) {
 		require.Len(t, entries, 1)
 		require.Equal(t, "read-initial-handshake", entries[0].ContextMap()["stage"])
 		require.Equal(t, err.Error(), entries[0].ContextMap()["error"])
+		draining := manager.getTunnelsByCNID(oldCN.uuid)
+		require.True(t, len(draining) == 1 && draining[0] == tun, "draining must still find the source tunnel")
+		require.True(t, manager.getCNTunnels(oldCN.hash)[oldCN.uuid].exists(tun), "routing must still count the source tunnel")
 		require.Equal(t, 1, manager.count())
 		current, err := manager.GetCNServerByConnID(0)
 		require.NoError(t, err)
@@ -1424,29 +1431,26 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestServerConnParseConnID(t *testing.T) {
+func TestParseConnID(t *testing.T) {
 	t.Run("too short error", func(t *testing.T) {
-		s := &serverConn{}
 		p := &frontend.Packet{
 			Payload: []byte{10},
 		}
-		err := s.parseConnID(p)
+		_, err := parseConnID(p)
 		require.Error(t, err)
 	})
 
 	t.Run("no string", func(t *testing.T) {
-		s := &serverConn{}
 		p := &frontend.Packet{
 			Length:  8,
 			Payload: []byte{10},
 		}
 		p.Payload = append(p.Payload, []byte("v1")...)
-		err := s.parseConnID(p)
+		_, err := parseConnID(p)
 		require.Error(t, err)
 	})
 
 	t.Run("no conn id", func(t *testing.T) {
-		s := &serverConn{}
 		p := &frontend.Packet{
 			Length:  5,
 			Payload: []byte{10},
@@ -1454,12 +1458,11 @@ func TestServerConnParseConnID(t *testing.T) {
 		p.Payload = append(p.Payload, []byte("v1")...)
 		p.Payload = append(p.Payload, []byte{0}...)
 		p.Payload = append(p.Payload, []byte{2, 0, 0, 0}...)
-		err := s.parseConnID(p)
+		_, err := parseConnID(p)
 		require.Error(t, err)
 	})
 
 	t.Run("no error", func(t *testing.T) {
-		s := &serverConn{connID: 91}
 		p := &frontend.Packet{
 			Length:  8,
 			Payload: []byte{10},
@@ -1467,9 +1470,9 @@ func TestServerConnParseConnID(t *testing.T) {
 		p.Payload = append(p.Payload, []byte("v1")...)
 		p.Payload = append(p.Payload, []byte{0}...)
 		p.Payload = append(p.Payload, []byte{2, 0, 0, 0}...)
-		err := s.parseConnID(p)
+		connID, err := parseConnID(p)
 		require.NoError(t, err)
-		require.Equal(t, uint32(2), s.ConnID())
+		require.Equal(t, uint32(2), connID)
 	})
 }
 
@@ -1495,7 +1498,7 @@ func TestCachedServerConnRebindsManagerAcrossReuseGenerations(t *testing.T) {
 			rebalancer: rebalancer,
 		}
 		sc.tunnelOwner.tun = origin
-		manager.connect(cn, origin)
+		sc.registerTunnel()
 		return sc, cn
 	}
 	contains := func(cn *CNServer, tun *tunnel) bool {

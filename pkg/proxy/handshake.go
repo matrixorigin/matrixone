@@ -256,9 +256,9 @@ func (c *clientConn) upgradeToTLS(ctx context.Context, handshakeDeadline time.Ti
 	return nil
 }
 
-func (s *serverConn) parseConnID(p *frontend.Packet) error {
+func parseConnID(p *frontend.Packet) (uint32, error) {
 	if len(p.Payload) < 2 {
-		return moerr.NewInternalErrorNoCtx("protocol error: payload is too short")
+		return 0, moerr.NewInternalErrorNoCtx("protocol error: payload is too short")
 	}
 	// From the beginning of payload.
 	pos := 0
@@ -266,24 +266,17 @@ func (s *serverConn) parseConnID(p *frontend.Packet) error {
 	pos += 1
 	zeroPos := bytes.IndexByte(p.Payload[pos:], 0)
 	if zeroPos == -1 {
-		return moerr.NewInternalErrorNoCtx("protocol error: cannot get null string")
+		return 0, moerr.NewInternalErrorNoCtx("protocol error: cannot get null string")
 	}
 	// Pass the server version string.
 	pos += zeroPos + 1
 	if pos+3 >= int(p.Length) {
-		return moerr.NewInternalErrorNoCtx("protocol error: cannot parse connection ID")
+		return 0, moerr.NewInternalErrorNoCtx("protocol error: cannot parse connection ID")
 	}
-	connID := binary.LittleEndian.Uint32(p.Payload[pos : pos+4])
-	if s.sentExtraInfo && connID != s.expectedConnID {
-		return newConnectErr(moerr.NewInternalErrorNoCtxf(
-			"backend handshake connection ID mismatch: expected %d, received %d", s.expectedConnID, connID))
-	}
-	s.connID = connID
-	return nil
+	return binary.LittleEndian.Uint32(p.Payload[pos : pos+4]), nil
 }
 
-// readInitialHandshake reads initial handshake from CN server. The result
-// is useless.
+// readInitialHandshake checks that the CN used the connection ID sent in ExtraInfo.
 func (s *serverConn) readInitialHandshake() error {
 	r, err := s.readPacket()
 	if err != nil {
@@ -292,9 +285,15 @@ func (s *serverConn) readInitialHandshake() error {
 	if len(r.Payload) > proxyBackendAuthResponseLimit {
 		return frontend.ErrPacketTooLarge
 	}
-	if err := s.parseConnID(r); err != nil {
+	connID, err := parseConnID(r)
+	if err != nil {
 		return err
 	}
+	if expected := s.cnServer.connID; connID != expected {
+		return newConnectErr(moerr.NewInternalErrorNoCtxf(
+			"backend handshake connection ID mismatch: expected %d, received %d", expected, connID))
+	}
+	s.connID = connID
 	return nil
 }
 

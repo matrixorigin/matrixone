@@ -484,7 +484,7 @@ func (r *router) connect(
 
 	// For test, ignore handshake phase.
 	if r.test {
-		r.rebalancer.connManager.connect(cn, t)
+		sc.registerTunnel()
 		if accountHealth {
 			r.health.reportSuccess(cn.uuid, cn.addr)
 		}
@@ -504,13 +504,7 @@ func (r *router) connect(
 				WithLabelValues(result).
 				Observe(time.Since(start).Seconds())
 		}()
-		var resp *frontend.Packet
-		var err error
-		if contextual, ok := sc.(contextHandshakeHandler); ok {
-			resp, err = contextual.HandleHandshakeContext(ctx, handshakeResp, r.authTimeout)
-		} else {
-			resp, err = sc.HandleHandshake(handshakeResp, r.authTimeout)
-		}
+		resp, err := sc.HandleHandshakeContext(ctx, handshakeResp, r.authTimeout)
 		if err != nil {
 			result = "error"
 			if isTimeoutErr(err) {
@@ -534,7 +528,7 @@ func (r *router) connect(
 	cn.connID = sc.ConnID()
 
 	// After connect succeed, track the connection.
-	r.rebalancer.connManager.connect(cn, t)
+	sc.registerTunnel()
 	if accountHealth {
 		// The Route-selected CN accepted a new session: close its breaker if
 		// it was open.
