@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -14264,6 +14265,233 @@ func TestCheckpointObjectList(t *testing.T) {
 		txn.Commit(ctx)
 	}
 }
+func TestReplayAppendAcrossColumnRename(t *testing.T) {
+	testReplayAppendAcrossColumnRename(t, false, false)
+}
+
+func TestReplayAppendAcrossCheckpointColumnRename(t *testing.T) {
+	t.Run("rename", func(t *testing.T) { testReplayAppendAcrossColumnRename(t, true, false) })
+	t.Run("swap", func(t *testing.T) { testReplayAppendAcrossColumnRename(t, true, true) })
+	t.Run("swap_without_checkpoint", func(t *testing.T) { testReplayAppendAcrossColumnRename(t, false, true) })
+}
+
+func testReplayAppendAcrossColumnRename(t *testing.T, checkpointed, swap bool) {
+	t.Helper()
+	ctx := t.Context()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+
+	typ := types.T_int64.ToType()
+	schema := catalog.NewEmptySchema("wal_rename")
+	schema.Extra.NextColSeqnum = 8
+	schema.Extra.FeatureFlag = features.SchemaEvolved
+	require.NoError(t, schema.AppendPKCol("id", typ, 0))
+	require.NoError(t, schema.AppendColWithAttribute(engine.Attribute{Name: "price", Seqnum: 7, Type: typ}))
+	require.NoError(t, schema.Finalize(false))
+	tae.BindSchema(schema)
+	create, err := tae.StartTxn(nil)
+	require.NoError(t, err)
+	database, err := testutil.CreateDatabase2(ctx, create, testutil.DefaultTestDB)
+	require.NoError(t, err)
+	_, err = testutil.CreateRelation2(ctx, create, database, schema)
+	require.NoError(t, err)
+	require.NoError(t, create.Commit(ctx))
+
+	writer, oldRel := tae.GetRelation()
+	payload := containers.BuildBatch(schema.Attrs(), schema.Types(), containers.Options{Allocator: common.DefaultAllocator})
+	defer payload.Close()
+	require.NoError(t, vector.AppendAny(payload.GetVectorByName("id"), int64(1), false, payload.GetVectorByName("id").MPool()))
+	require.NoError(t, vector.AppendAny(payload.GetVectorByName("price"), int64(42), false, payload.GetVectorByName("price").MPool()))
+	require.NoError(t, oldRel.Append(ctx, payload))
+
+	ddl, rel := tae.GetRelation()
+	rename := func(old, new string, seq uint32) {
+		t.Helper()
+		require.NoError(t, rel.AlterTable(ctx, api.NewRenameColumnReq(database.GetID(), rel.ID(), old, new, seq)))
+	}
+	keyName, valueName := "id", "amount"
+	if swap {
+		rename("id", "tmp", 0)
+		rename("price", "id", 7)
+		rename("tmp", "price", 0)
+		keyName, valueName = "price", "id"
+	} else {
+		rename("price", "amount", 7)
+	}
+	ddlDB, err := ddl.GetDatabaseByID(database.GetID())
+	require.NoError(t, err)
+	require.NoError(t, testutil.ReplaceRelationCatalogRows(ctx, ddl, ddlDB, rel, schema))
+	require.NoError(t, ddl.Commit(ctx))
+	var checkpointEnd types.TS
+	if checkpointed {
+		target := tae.TxnMgr.Now()
+		checkpointCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+		defer cancel()
+		require.NoError(t, tae.DB.ForceCheckpoint(checkpointCtx, target))
+		require.NoError(t, tae.DB.ForceGlobalCheckpoint(checkpointCtx, target, 0))
+		entry := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+		require.NotNil(t, entry)
+		require.True(t, entry.IsFinished())
+		checkpointEnd = entry.GetEnd()
+	}
+	require.NoError(t, writer.Commit(ctx))
+	start, prepare, renamed := writer.GetStartTS(), writer.GetPrepareTS(), ddl.GetCommitTS()
+	require.True(t, start.LT(&renamed) && renamed.LT(&prepare), "the WAL prepare time sees the new name")
+	if checkpointed {
+		require.True(t, renamed.LT(&checkpointEnd) && checkpointEnd.LT(&prepare), "the checkpoint must contain the rename and exclude the append")
+	}
+
+	tae.Restart(ctx)
+	reader, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	require.False(t, obj.ObjectPersisted(), "the scan must read a carrier rebuilt from WAL")
+	table := obj.GetTable()
+	if checkpointed {
+		require.Nil(t, table.GetVersionSchema(schema.Version), "the old writer schema must be absent after checkpoint recovery")
+	}
+	current := table.GetLastestSchema(false)
+	require.Equal(t, keyName, current.GetSingleSortKey().Name)
+	require.Equal(t, uint16(0), current.GetSingleSortKey().SeqNum)
+	valueIdx := current.GetColIdx(valueName)
+	require.GreaterOrEqual(t, valueIdx, 0)
+	require.Equal(t, uint16(7), current.ColDefs[valueIdx].SeqNum)
+	id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(int64(1)))
+	require.NoError(t, err)
+	key, isNull, err := rel.GetValue(id, row, uint16(current.GetSingleSortKeyIdx()), false)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, int64(1), key)
+	value, isNull, err := rel.GetValue(id, row, uint16(valueIdx), false)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, int64(42), value)
+	require.NoError(t, reader.Commit(ctx))
+}
+
+func TestReplayAppendWithSameTxnColumnRename(t *testing.T) {
+	for _, scenario := range []string{"insert_then_rename", "insert_rename_insert", "rename_then_insert", "create_then_insert", "create_insert_rename"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := t.Context()
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+			defer tae.Close()
+
+			typ := types.T_int32.ToType()
+			schema := catalog.NewEmptySchema("rename01")
+			require.NoError(t, schema.AppendPKCol("c", typ, 0))
+			require.NoError(t, schema.AppendCol("d", typ))
+			require.NoError(t, schema.Finalize(false))
+			tae.BindSchema(schema)
+			txn, err := tae.StartTxn(nil)
+			require.NoError(t, err)
+			database, err := txn.CreateDatabase(testutil.DefaultTestDB, "", "")
+			require.NoError(t, err)
+			rel, err := database.CreateRelation(schema)
+			require.NoError(t, err)
+
+			pk, value := "c", "d"
+			want := make(map[int32]int32)
+			insert := func(key, val int32) {
+				bat := containers.BuildBatch([]string{pk, value}, []types.Type{typ, typ}, containers.Options{Allocator: common.DefaultAllocator})
+				defer bat.Close()
+				require.NoError(t, vector.AppendAny(bat.GetVectorByName(pk), key, false, bat.GetVectorByName(pk).MPool()))
+				require.NoError(t, vector.AppendAny(bat.GetVectorByName(value), val, false, bat.GetVectorByName(value).MPool()))
+				require.NoError(t, rel.Append(ctx, bat))
+				want[key] = val
+			}
+			rename := func(oldName, newName string, seqnum uint32) {
+				require.NoError(t, rel.AlterTable(ctx, api.NewRenameColumnReq(database.GetID(), rel.ID(), oldName, newName, seqnum)))
+			}
+			if scenario != "create_then_insert" && scenario != "create_insert_rename" {
+				if scenario != "rename_then_insert" {
+					insert(1, 1)
+					insert(2, 2)
+				}
+				require.NoError(t, txn.Commit(ctx))
+				txn, rel = tae.GetRelation()
+			}
+			if scenario != "rename_then_insert" {
+				insert(3, 1)
+				insert(4, 2)
+			}
+			if scenario != "create_then_insert" {
+				rename(pk, "newCCCC", 0)
+				pk = "newCCCC"
+			}
+			if scenario == "insert_rename_insert" {
+				insert(5, 3)
+				// Rename the PK again and change a non-key column with rows in the batch.
+				rename(pk, "final_key", 0)
+				pk = "final_key"
+				rename(value, "final_value", 1)
+				value = "final_value"
+			}
+			if scenario == "insert_rename_insert" || scenario == "rename_then_insert" {
+				insert(6, 4)
+			}
+
+			check := func(rel handle.Relation, recovered bool) {
+				current := rel.Schema(false).(*catalog.Schema)
+				require.Equal(t, pk, current.GetSingleSortKey().Name)
+				require.Equal(t, []string{pk, value}, current.Attrs())
+				var scan *containers.Batch
+				defer func() {
+					if scan != nil {
+						scan.Close()
+					}
+				}()
+				it := rel.MakeObjectIt(false)
+				defer it.Close()
+				for it.Next() {
+					func() {
+						obj := it.GetObject()
+						defer obj.Close()
+						if recovered {
+							require.False(t, obj.GetMeta().(*catalog.ObjectEntry).ObjectPersisted(), "the rows must be rebuilt from WAL")
+						}
+						require.NoError(t, obj.HybridScan(ctx, &scan, 0, []int{0, 1}, common.DefaultAllocator))
+					}()
+				}
+				require.NoError(t, it.GetError())
+				require.NotNil(t, scan)
+				scan.Compact()
+				require.Equal(t, len(want), scan.Length())
+				got := make(map[int32]int32, scan.Length())
+				keys, vals := scan.GetVectorByName(pk), scan.GetVectorByName(value)
+				for i := range scan.Length() {
+					require.False(t, keys.IsNull(uint64(i)))
+					require.False(t, vals.IsNull(uint64(i)))
+					got[keys.GetValue(i).(int32)] = vals.GetValue(i).(int32)
+				}
+				require.Equal(t, want, got)
+				for key, val := range want {
+					id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(key))
+					require.NoError(t, err)
+					gotKey, isNull, err := rel.GetValue(id, row, 0, false)
+					require.NoError(t, err)
+					require.False(t, isNull)
+					require.Equal(t, key, gotKey)
+					gotValue, isNull, err := rel.GetValue(id, row, 1, false)
+					require.NoError(t, err)
+					require.False(t, isNull)
+					require.Equal(t, val, gotValue)
+				}
+			}
+			if scenario == "insert_rename_insert" {
+				check(rel, false)
+			}
+			require.NoError(t, txn.Commit(ctx))
+			for _, recovered := range []bool{false, true} {
+				if recovered {
+					tae.Restart(ctx)
+				}
+				reader, rel := tae.GetRelation()
+				check(rel, recovered)
+				require.NoError(t, reader.Commit(ctx))
+			}
+		})
+	}
+}
+
 func TestReplayDebugLog(t *testing.T) {
 	ctx := context.Background()
 

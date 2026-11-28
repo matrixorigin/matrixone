@@ -538,7 +538,7 @@ func TestReplayTxnStoreLifecycle(t *testing.T) {
 	ctx := context.WithValue(context.Background(), struct{}{}, "replay")
 	txnCtx := txnbase.NewTxnCtx([]byte("replay-lifecycle"), types.BuildTS(10, 0), types.TS{})
 	cmd := &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}
-	replayTxn := MakeReplayTxn(ctx, mgr, txnCtx, 42, cmd, noopReplayObserver{}, c)
+	replayTxn := MakeReplayTxn(ctx, mgr, txnCtx, 42, cmd, noopReplayObserver{}, c, types.TS{})
 	store := replayTxn.GetStore().(*replayTxnStore)
 
 	assert.Same(t, ctx, store.GetContext())

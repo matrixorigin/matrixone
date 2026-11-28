@@ -320,7 +320,7 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 	visible, dropped := entry.GetVisibility(txn)
 	if !visible {
 		entry.RLock()
-		visible = entry.sessionTemporarySchemaLocked(txn) != nil
+		visible = entry.sessionTemporarySchemaLocked(txn, false) != nil
 		entry.RUnlock()
 	}
 	if !visible || dropped {

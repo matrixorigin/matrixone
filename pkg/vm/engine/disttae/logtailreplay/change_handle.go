@@ -224,7 +224,11 @@ func (r *BatchHandle) QuickNext(data **batch.Batch, mp *mpool.MPool) (err error)
 
 func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
 	t0 := time.Now()
-	if *bat == nil {
+	if r.baseHandle.changesHandle.readSpec != nil {
+		if err = appendProjectedChangeWindow(bat, r.batches, start, end, mp); err != nil {
+			return err
+		}
+	} else if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		for _, vec := range r.batches.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
@@ -1292,6 +1296,7 @@ type CNObjectHandle struct {
 
 	cache    []*batch.Batch
 	prepared []bool
+	layouts  []objectio.SpecialColumnLayout
 	blks     []types.Blockid
 	TSs      []types.TS
 	maxRows  int
@@ -1313,11 +1318,16 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 }
 func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
+	readCtx, cancel := context.WithCancelCause(ctx)
 	jobs := make([]*tasks.Job, 0)
+	defer func() {
+		cancel(err)
+		releasePrefetchedChangeBlocks(jobs, h.mp)
+	}()
 	blks := make([]types.Blockid, 0)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
-	for i := 0; i < prefetchWidth; i++ {
+	for i := 0; i < prefetchWidth && readCtx.Err() == nil; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
 			break
 		}
@@ -1331,9 +1341,9 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		h.TSs = append(h.TSs, entry.CreateTime)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(
-			ctx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
+			readCtx, cancel, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
 			h.base.changesHandle.scheduler, h.maxRows, h.maxBytes,
-			h.base.changesHandle.spillConfig, h.mp,
+			h.base.changesHandle.spillConfig, h.mp, h.base.changesHandle, h.isTombstone,
 		)
 		jobs = append(jobs, job)
 		if !bounded {
@@ -1342,8 +1352,10 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	}
 	for i, job := range jobs {
 		res := job.GetResult()
+		putJob(job)
+		jobs[i] = nil
 		if res.Err != nil {
-			err = res.Err
+			err = context.Cause(readCtx)
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Info("ChangesHandle-FileNotFound",
 					zap.String("err", err.Error()))
@@ -1351,10 +1363,12 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			h.base.changesHandle.readDuration += time.Since(t0)
 			return
 		}
-		putJob(job)
 		window := res.Res.(*persistedBlockWindow)
 		h.cache = append(h.cache, window.batch)
 		h.prepared = append(h.prepared, false)
+		if !h.isTombstone && h.base.changesHandle.readSpec != nil {
+			h.layouts = append(h.layouts, window.specialLayout)
+		}
 		h.blks = append(h.blks, blks[i])
 		if bounded {
 			h.blockRowOffset += window.rows
@@ -1365,7 +1379,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		}
 	}
 	h.base.changesHandle.readDuration += time.Since(t0)
-	return
+	return context.Cause(readCtx)
 }
 
 func (h *CNObjectHandle) advanceBlock(blockCount uint32) {
@@ -1399,6 +1413,9 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	ts := h.TSs[0]
 	discardSource := func() {
 		h.cache = h.cache[1:]
+		if len(h.layouts) > 0 {
+			h.layouts = h.layouts[1:]
+		}
 		if len(h.prepared) > 0 {
 			h.prepared = h.prepared[1:]
 		}
@@ -1415,6 +1432,25 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 			err = updateCNTombstoneBatch(
 				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
 			)
+		} else if changes := h.base.changesHandle; changes.readSpec != nil {
+			layout := h.layouts[0]
+			commitTS, allocErr := vector.NewConstFixed(objectio.TSType, ts, data.RowCount(), h.mp)
+			if allocErr != nil {
+				discardSource()
+				return allocErr
+			}
+			vectors := make([]*vector.Vector, 0, len(changes.logicalSeqnums)+2)
+			if changes.retainRowID {
+				vectors = append(vectors, data.Vecs[layout.PhysicalAddr])
+			}
+			vectors = append(vectors, data.Vecs[:len(changes.logicalSeqnums)]...)
+			vectors = append(vectors, commitTS)
+			for _, pos := range []uint16{layout.CommitTS, layout.Abort} {
+				if pos != objectio.InvalidSpecialColumnPosition {
+					data.Vecs[pos].Free(h.mp)
+				}
+			}
+			data.Vecs = vectors
 		} else {
 			err = updateCNDataBatch(
 				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
@@ -1477,6 +1513,7 @@ func (h *CNObjectHandle) Close() {
 	}
 	h.cache = nil
 	h.prepared = nil
+	h.layouts = nil
 	h.blks = nil
 	h.TSs = nil
 }
@@ -1918,7 +1955,7 @@ type aObjectReadGroup struct {
 }
 
 func (h *AObjectHandle) prefetch(ctx context.Context) error {
-	if !h.coalesceReads {
+	if !h.coalesceReads || (!h.isTombstone && h.p.changesHandle.readSpec != nil) {
 		return h.prefetchWindows(ctx)
 	}
 	t0 := time.Now()
@@ -2059,11 +2096,16 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 
 func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 	t0 := time.Now()
+	readCtx, cancel := context.WithCancelCause(ctx)
 	jobs := make([]*tasks.Job, 0)
+	defer func() {
+		cancel(err)
+		releasePrefetchedChangeBlocks(jobs, h.mp)
+	}()
 	blks := make([]types.Blockid, 0)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
-	for i := 0; i < prefetchWidth; i++ {
+	for i := 0; i < prefetchWidth && readCtx.Err() == nil; i++ {
 		var obj *objectio.ObjectEntry
 		var blk uint16
 		if bounded && h.pendingObject != nil {
@@ -2071,9 +2113,10 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		} else {
 			var ok bool
 			var targetErr error
-			obj, blk, ok, targetErr = h.nextPrefetchTarget(ctx)
+			obj, blk, ok, targetErr = h.nextPrefetchTarget(readCtx)
 			if targetErr != nil {
-				err = targetErr
+				cancel(targetErr)
+				err = context.Cause(readCtx)
 				h.p.changesHandle.readDuration += time.Since(t0)
 				return
 			}
@@ -2086,17 +2129,19 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		}
 		stats := obj.ObjectStats
 		job := prefetchObjects(
-			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
+			readCtx, cancel, uint32(blk), h.blockRowOffset, h.fs, &stats,
 			h.p.changesHandle.scheduler, h.maxRows, h.maxBytes,
-			h.p.changesHandle.spillConfig, h.mp,
+			h.p.changesHandle.spillConfig, h.mp, h.p.changesHandle, h.isTombstone,
 		)
 		jobs = append(jobs, job)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 	}
 	for i, job := range jobs {
 		res := job.GetResult()
+		putJob(job)
+		jobs[i] = nil
 		if res.Err != nil {
-			err = res.Err
+			err = context.Cause(readCtx)
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Info("ChangesHandle-FileNotFound",
 					zap.String("err", err.Error()))
@@ -2104,7 +2149,6 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 			h.p.changesHandle.readDuration += time.Since(t0)
 			return
 		}
-		putJob(job)
 		window := res.Res.(*persistedBlockWindow)
 		h.cache = append(h.cache, window.batch)
 		h.specialLayouts = append(h.specialLayouts, window.specialLayout)
@@ -2119,7 +2163,7 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		}
 	}
 	h.p.changesHandle.readDuration += time.Since(t0)
-	return
+	return context.Cause(readCtx)
 }
 
 func (h *AObjectHandle) init(ctx context.Context, quick bool) (err error) {
@@ -2221,7 +2265,11 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 		return moerr.GetOkExpectedEOF()
 	}
 	t0 := time.Now()
-	if *bat == nil {
+	if !h.isTombstone && h.p.changesHandle.readSpec != nil {
+		if err = appendProjectedChangeWindow(bat, h.currentBatch, start, end, mp); err != nil {
+			return err
+		}
+	} else if *bat == nil {
 		*bat = batch.NewWithSize(len(h.currentBatch.Vecs))
 		for i, vec := range h.currentBatch.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
@@ -2599,7 +2647,12 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 		if checkTS(start, end, entry.Time) {
 			tsMatched++
 			if !entry.Deleted && !tombstone {
-				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, p.changesHandle.logicalSeqnums, mp)
+				changes := p.changesHandle
+				if changes.readSpec == nil {
+					fillInInsertBatch(&bat, entry, changes.retainRowID, changes.logicalSeqnums, mp)
+				} else if err = changes.appendProjectedInsert(&bat, entry, mp); err != nil {
+					return nil, err
+				}
 				bat.SetRowCount(bat.Vecs[0].Length())
 				emitted++
 			}
@@ -3019,6 +3072,32 @@ func (p *baseHandle) objectFileExists(ctx context.Context, obj *objectio.ObjectE
 	return false, err
 }
 
+type changeReadSchemaKey struct{}
+
+type changeReadSchema struct {
+	seqnums []uint16
+	spec    *objectio.ColumnReadSpec
+}
+
+// WithChangeReadSchema binds the same evolved schema to all parts of a split
+// change range. The constructor takes its own copy of the logical sequence order.
+func WithChangeReadSchema(ctx context.Context, seqnums []uint16, spec *objectio.ColumnReadSpec) context.Context {
+	if spec == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, changeReadSchemaKey{}, changeReadSchema{seqnums: seqnums, spec: spec})
+}
+
+func (p *ChangeHandler) bindReadSchema(ctx context.Context) {
+	layout, ok := ctx.Value(changeReadSchemaKey{}).(changeReadSchema)
+	if !ok {
+		return
+	}
+	p.readSpec = layout.spec
+	p.logicalSeqnums = slices.Clone(layout.seqnums)
+	p.primaryIdx = slices.Index(p.logicalSeqnums, uint16(p.primarySeqnum))
+}
+
 type ChangeHandler struct {
 	// When true, Case 2.2 (insert->delete) keeps the delete instead of dropping
 	// the pair: CDC restart from checkpoint, or a caller that opts in through
@@ -3034,6 +3113,7 @@ type ChangeHandler struct {
 	primarySeqnum       int
 	primaryIdx          int
 	logicalSeqnums      []uint16
+	readSpec            *objectio.ColumnReadSpec
 	scheduler           tasks.JobScheduler
 	mp                  *mpool.MPool
 
@@ -3224,7 +3304,7 @@ func NewChangesHandlerWithPartitionStateRange(
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
 	return NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
-		ctx, state, start, end, skipDeletes, maxRow, primarySeqnum, primarySeqnum, nil, mp, fs,
+		ctx, state, start, end, skipDeletes, maxRow, primarySeqnum, primarySeqnum, nil, mp, fs, nil,
 	)
 }
 
@@ -3241,6 +3321,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 	logicalSeqnums []uint16,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	readSpec *objectio.ColumnReadSpec,
 ) (changeHandle *ChangeHandler, err error) {
 	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
 	if rangeLimit.MaxInMemoryRows > 0 && rangeLimit.MaxInMemoryBytes <= 0 {
@@ -3268,6 +3349,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		primarySeqnum:            primarySeqnum,
 		primaryIdx:               primaryIdx,
 		logicalSeqnums:           append([]uint16(nil), logicalSeqnums...),
+		readSpec:                 readSpec,
 		mp:                       mp,
 		scheduler:                tasks.NewParallelJobScheduler(LoadParallism),
 		enableCommitTSBlockPrune: true,
@@ -3283,12 +3365,10 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		preserveAllVersions:      engine.CollectChangesPreserveAllVersionsFromContext(ctx),
 		disableQuick:             engine.CollectChangesDisableQuickFromContext(ctx),
 	}
+	owned := changeHandle
 	defer func() {
 		if err != nil {
-			if changeHandle != nil {
-				_ = changeHandle.Close()
-				changeHandle = nil
-			}
+			_ = owned.Close()
 		}
 	}()
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -3376,6 +3456,7 @@ func newChangesHandlerWithCheckpointEntries(
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
 		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 	}
+	changeHandle.bindReadSchema(ctx)
 	defer func() {
 		if err == nil {
 			return
@@ -3723,6 +3804,7 @@ func NewChangesHandler(
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
 		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 	}
+	changeHandle.bindReadSchema(ctx)
 	defer func() {
 		if err != nil {
 			changeHandle.scheduler.Stop()
@@ -4298,6 +4380,69 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 
 }
 
+// The output may receive rows from several storage representations. Keep
+// the destination mutable even when an entire source window is virtual NULL.
+func appendProjectedChangeWindow(dst **batch.Batch, src *batch.Batch, start, end int, mp *mpool.MPool) error {
+	if *dst == nil {
+		*dst = batch.NewWithSize(len(src.Vecs))
+		for i, vec := range src.Vecs {
+			(*dst).Vecs[i] = vector.NewVec(*vec.GetType(), mp)
+		}
+	} else if !batchesShareAppendSchema(*dst, src) {
+		return moerr.GetOkExpectedEOB()
+	}
+	for i, vec := range (*dst).Vecs {
+		if err := vec.UnionBatch(src.Vecs[i], int64(start), end-start, nil, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *ChangeHandler) appendProjectedInsert(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) error {
+	offset := 0
+	if p.retainRowID {
+		offset = 1
+	}
+	if *bat == nil {
+		*bat = batch.NewWithSize(offset + len(p.logicalSeqnums) + 1)
+		if p.retainRowID {
+			(*bat).Vecs[0] = vector.NewVec(objectio.RowidType, mp)
+		}
+		for i, seq := range p.logicalSeqnums {
+			typ, err := p.readSpec.ColumnType(seq)
+			if err != nil {
+				return err
+			}
+			(*bat).Vecs[offset+i] = vector.NewVec(typ, mp)
+		}
+		(*bat).Vecs[len((*bat).Vecs)-1] = vector.NewVec(objectio.TSType, mp)
+	}
+	if p.retainRowID {
+		if err := vector.AppendFixed((*bat).Vecs[0], entry.RowID, false, mp); err != nil {
+			return err
+		}
+	}
+	for i, seq := range p.logicalSeqnums {
+		src, err := entry.Batch.DataColumn(seq, p.readSpec)
+		if err != nil {
+			return err
+		}
+		dst := (*bat).Vecs[offset+i]
+		if src == nil {
+			err = p.readSpec.AppendMissingRows(seq, dst, 1, mp)
+		} else if !dst.GetType().Eq(*src.GetType()) {
+			return moerr.NewInternalErrorNoCtxf("column sequence %d has a different type in the logtail batch", seq)
+		} else {
+			err = dst.UnionOne(src, entry.Offset, mp)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return vector.AppendFixed((*bat).Vecs[len((*bat).Vecs)-1], entry.Time, false, mp)
+}
+
 func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, logicalSeqnums []uint16, mp *mpool.MPool) {
 	if *bat == nil {
 		(*bat) = newDataBatchWithBatch(entry.Batch.Batch, retainRowID, logicalSeqnums, mp)
@@ -4416,8 +4561,23 @@ func persistedColumnSeqnums(meta objectio.BlockObject) []uint16 {
 	return orderPersistedColumnSeqnums(columns)
 }
 
+// releasePrefetchedChangeBlocks drains jobs whose results were not transferred
+// to a handle, including jobs scheduled before a later block failed.
+func releasePrefetchedChangeBlocks(jobs []*tasks.Job, mp *mpool.MPool) {
+	for _, job := range jobs {
+		if job != nil {
+			res := job.GetResult()
+			if window, ok := res.Res.(*persistedBlockWindow); ok && window != nil {
+				window.batch.Clean(mp)
+			}
+			putJob(job)
+		}
+	}
+}
+
 func prefetchObjects(
 	ctx context.Context,
+	cancel context.CancelCauseFunc,
 	blockID uint32,
 	rowOffset int,
 	fs fileservice.FileService,
@@ -4427,14 +4587,24 @@ func prefetchObjects(
 	maxBytes int,
 	spillConfig engine.ChangeRangeSpillConfig,
 	mp *mpool.MPool,
+	change *ChangeHandler,
+	isTombstone bool,
 ) (job *tasks.Job) {
 	job = getJob(
 		ctx,
 		stats.ObjectName().String(),
 		JTCDCLoad,
 		func(ctx context.Context) (res *tasks.JobResult) {
+			// A failed read must stop siblings even when its result follows
+			// a stalled read in replay order.
+			defer func() {
+				if res != nil && res.Err != nil {
+					cancel(res.Err)
+				}
+			}()
 			loc := stats.BlockLocation(uint16(blockID), 8192)
-			if maxRows > 0 || maxBytes > 0 {
+			project := !isTombstone && change.readSpec != nil
+			if project || maxRows > 0 || maxBytes > 0 {
 				meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
 				if err != nil {
 					return &tasks.JobResult{Err: err}
@@ -4457,6 +4627,13 @@ func prefetchObjects(
 						windowRows = min(windowRows, max(1, int(uint64(windowByteBudget)*uint64(totalRows)/decodedBytes)))
 					}
 				}
+				layout := objectio.ResolveSpecialColumnLayout(blockMeta)
+				if project {
+					// Use the same metadata and row window as the bounded legacy load.
+					window, err := change.readProjectedChangeBlock(ctx, fs, loc, &dataMeta, blockMeta,
+						layout, rowOffset, windowRows, windowByteBudget, mp)
+					return &tasks.JobResult{Res: window, Err: err}
+				}
 				cols := persistedColumnSeqnums(blockMeta)
 				bat, err := objectio.ReadOneBlockAllColumnsWindow(
 					ctx, &dataMeta, loc.Name().String(), blockID, cols,
@@ -4471,7 +4648,7 @@ func prefetchObjects(
 				}
 				return &tasks.JobResult{Res: &persistedBlockWindow{
 					batch: bat, rows: windowRows, totalRows: totalRows,
-					specialLayout: objectio.ResolveSpecialColumnLayout(blockMeta), seqnums: cols,
+					specialLayout: layout, seqnums: cols,
 				}}
 			}
 			bat, _, specialLayout, err := ioutil.LoadOneBlockWithSpecialLayout(
@@ -4492,8 +4669,98 @@ func prefetchObjects(
 			return
 		},
 	)
-	scheduler.Schedule(job)
+	if err := scheduler.Schedule(job); err != nil {
+		cancel(err)
+		job.DoneWithErr(err)
+	}
 	return
+}
+
+// readProjectedChangeBlock keeps logical data columns before their storage-only
+// columns. Rewrite the special positions to match the projected vectors so an
+// old commit timestamp cannot be mistaken for a new data column.
+func (p *ChangeHandler) readProjectedChangeBlock(
+	ctx context.Context, fs fileservice.FileService, loc objectio.Location,
+	meta *objectio.ObjectDataMeta, block objectio.BlockObject, layout objectio.SpecialColumnLayout,
+	rowOffset, rows, byteBudget int, mp *mpool.MPool,
+) (*persistedBlockWindow, error) {
+	physical := make([]uint16, 0, len(p.logicalSeqnums)+3)
+	positions := make([]int, len(p.logicalSeqnums))
+	typesByColumn := make([]types.Type, len(p.logicalSeqnums))
+	for i, seq := range p.logicalSeqnums {
+		typ, err := p.readSpec.ColumnType(seq)
+		if err != nil {
+			return nil, err
+		}
+		typesByColumn[i] = typ
+		col, err := p.readSpec.ResolveColumnMeta(block, seq)
+		if err != nil {
+			return nil, err
+		}
+		if col.IsVirtual() {
+			positions[i] = -1
+			continue
+		}
+		positions[i] = len(physical)
+		physical = append(physical, seq)
+	}
+	dataColumns := len(physical)
+	if !p.retainRowID {
+		layout.PhysicalAddr = objectio.InvalidSpecialColumnPosition
+	}
+	// These positions are indexes in the projected batch, not in the block.
+	projectedLayout := layout
+	next := uint16(len(positions))
+	for _, pos := range []*uint16{&projectedLayout.PhysicalAddr, &projectedLayout.CommitTS, &projectedLayout.Abort} {
+		if *pos != objectio.InvalidSpecialColumnPosition {
+			physical = append(physical, *pos)
+			*pos = next
+			next++
+		}
+	}
+	loaded, err := objectio.ReadOneBlockAllColumnsWindow(
+		ctx, meta, loc.Name().String(), uint32(loc.ID()), physical,
+		rowOffset, rows, fileservice.SkipAllCache, fs, mp, byteBudget,
+		func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
+			return newLegacyColumnSpill(ctx, p.spillConfig)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	for i, pos := range positions {
+		if pos >= 0 && !typesByColumn[i].Eq(*loaded.Vecs[pos].GetType()) {
+			loaded.Clean(mp)
+			return nil, moerr.NewInternalErrorNoCtxf("column sequence %d has a different type in the persisted block", p.logicalSeqnums[i])
+		}
+	}
+	var rowID *vector.Vector
+	if p.retainRowID && projectedLayout.PhysicalAddr == objectio.InvalidSpecialColumnPosition {
+		blockID := objectio.NewBlockidWithObjectID(loc.Name().ObjectId(), loc.ID())
+		rowID, err = objectio.ConstructRowidColumn(&blockID, uint32(rowOffset), uint32(rows), mp)
+		if err != nil {
+			loaded.Clean(mp)
+			return nil, err
+		}
+	}
+	vectors := make([]*vector.Vector, len(positions), int(next)+1)
+	for i, pos := range positions {
+		if pos >= 0 {
+			vectors[i] = loaded.Vecs[pos]
+			*vectors[i].GetType() = typesByColumn[i]
+		} else {
+			vectors[i] = vector.NewConstNull(typesByColumn[i], rows, mp)
+		}
+	}
+	vectors = append(vectors, loaded.Vecs[dataColumns:]...)
+	if rowID != nil {
+		projectedLayout.PhysicalAddr = uint16(len(vectors))
+		vectors = append(vectors, rowID)
+	}
+	loaded.Vecs = vectors
+	return &persistedBlockWindow{
+		batch: loaded, rows: rows, totalRows: int(block.GetRows()), specialLayout: projectedLayout,
+	}, nil
 }
 
 func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.MPool) error {

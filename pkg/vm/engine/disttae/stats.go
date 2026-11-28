@@ -2322,6 +2322,7 @@ func collectTableStats(
 		v2.TxnStatementUpdateInfoFromZonemapHistogram.Observe(time.Since(start).Seconds())
 	}()
 	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
+	readSpec := objectio.NewColumnReadSpecFromTableDef(req.tableDef)
 	fs, fsErr := fileservice.Get[fileservice.FileService](req.fs, defines.SharedFileServiceName)
 	if fsErr != nil {
 		return 0, fsErr
@@ -2403,7 +2404,10 @@ func collectTableStats(
 			info.MaxObjectRowCount = objectRowCount
 			info.MinObjectRowCount = objectRowCount
 			for idx, col := range req.tableDef.Cols[:lenCols] {
-				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				columnMeta, err := objectio.ResolveColumnMeta(readSpec, meta, uint16(col.Seqnum))
+				if err != nil {
+					return err
+				}
 				info.NullCnts[idx] = int64(columnMeta.NullCnt())
 				info.ColumnZMs[idx] = columnMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
@@ -2444,7 +2448,10 @@ func collectTableStats(
 			}
 
 			for idx, col := range req.tableDef.Cols[:lenCols] {
-				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				columnMeta, err := objectio.ResolveColumnMeta(readSpec, meta, uint16(col.Seqnum))
+				if err != nil {
+					return err
+				}
 				info.NullCnts[idx] += int64(columnMeta.NullCnt())
 				// CRITICAL FIX: Always accumulate ColumnSize, even if ZoneMap is not initialized
 				// ZoneMap initialization status should not affect size calculation

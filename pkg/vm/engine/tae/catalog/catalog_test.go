@@ -559,6 +559,17 @@ func TestSessionTemporarySchemaVisibility(t *testing.T) {
 				require.Error(t, err)
 				require.Nil(t, entry.GetVisibleSchema(old, false))
 			}
+			walCtx := txnbase.NewEmptyTxnCtx()
+			walCtx.StartTS, walCtx.PrepareTS = oldTS, oldTS
+			replayed := txnbase.NewPersistedTxn(mgr, walCtx, nil, 0, nil, nil, nil, nil)
+			replayed.BindAccessInfo(1, 0, 0)
+			require.Nil(t, entry.GetVisibleSchema(replayed, false), "the temporary generation did not exist at prepare")
+			walCtx.PrepareTS = mgr.Now()
+			if tc.visible {
+				require.Same(t, schema, entry.GetVisibleSchema(replayed, false))
+			} else {
+				require.Nil(t, entry.GetVisibleSchema(replayed, false))
+			}
 			require.Equal(t, oldTS, old.GetStartTS())
 			drop, err := mgr.StartTxn(nil)
 			require.NoError(t, err)
@@ -570,6 +581,7 @@ func TestSessionTemporarySchemaVisibility(t *testing.T) {
 			_, err = entryDB.TxnGetTableEntryByID(relation.(*mockTableHandle).entry.ID, old)
 			require.Error(t, err)
 			require.Nil(t, entry.GetVisibleSchema(old, false))
+			require.Nil(t, entry.GetVisibleSchema(replayed, false))
 		})
 	}
 }

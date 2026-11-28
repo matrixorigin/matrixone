@@ -16,7 +16,6 @@ package tables
 
 import (
 	"context"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -155,18 +154,13 @@ func (appender *objectAppender) ApplyAppend(
 	node := n.MustMNode()
 	appender.obj.appendMVCC.LockForAppend()
 	defer appender.obj.appendMVCC.UnlockForAppend()
-	from, err = node.ApplyAppendLocked(bat)
+	if from, err = node.ApplyAppendLocked(bat, nil); err != nil {
+		return
+	}
 
-	schema := node.writeSchema
-	for _, colDef := range schema.ColDefs {
-		if colDef.IsPhyAddr() {
-			continue
-		}
-		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
-			if err = node.pkIndex.BatchUpsert(
-				bat.Vecs[colDef.Idx], from); err != nil {
-				panic(err)
-			}
+	if key, _ := node.appendPrimaryKey(bat, node.writeSchema); key != nil {
+		if err = node.pkIndex.BatchUpsert(key, from); err != nil {
+			panic(err)
 		}
 	}
 	return
@@ -175,57 +169,57 @@ func (appender *objectAppender) ApplyAppend(
 func (appender *objectAppender) ApplyAppendAt(
 	bat *containers.Batch,
 	offset uint32,
-	txn txnif.AsyncTxn,
+	writeSchema any,
 ) (err error) {
 	n := appender.obj.PinNode()
 	defer n.Unref()
 	node := n.MustMNode()
 	appender.obj.appendMVCC.LockForAppend()
 	defer appender.obj.appendMVCC.UnlockForAppend()
-	schema := node.writeSchema
-	oldRows, _ := node.Rows()
-	for _, colDef := range schema.ColDefs {
-		if !colDef.IsRealPrimary() || schema.IsSecondaryIndexTable() {
-			continue
-		}
-		srcPos := slices.Index(bat.Attrs, colDef.Name)
-		if srcPos < 0 {
-			continue
-		}
-		// A replayed append may be the first payload for an object.  In that
-		// case the memory node has no data vectors yet, or this column has not
-		// been materialized.  There are no old rows to remove from the PK index
-		// in either case.
-		if oldRows == 0 || node.data == nil || colDef.Idx >= len(node.data.Vecs) || node.data.Vecs[colDef.Idx] == nil {
-			continue
-		}
-		oldVec := node.data.Vecs[colDef.Idx]
-		for row := 0; row < bat.Length() && int(offset)+row < int(oldRows); row++ {
-			physicalRow := int(offset) + row
-			if oldVec.IsNull(uint64(physicalRow)) {
-				continue
-			}
-			if err = node.pkIndex.DeleteAt(oldVec.GetValue(physicalRow), uint32(physicalRow)); err != nil {
-				return err
-			}
-		}
+	source := node.writeSchema
+	if writeSchema != nil {
+		source = writeSchema.(*catalog.Schema)
 	}
-	if err = node.ApplyAppendAtLocked(bat, offset); err != nil {
+	var key containers.Vector
+	if err = node.ApplyAppendAtLocked(bat, offset, source, func() error {
+		var pkIdx int
+		key, pkIdx = node.appendPrimaryKey(bat, source)
+		if key != nil {
+			return node.removeOverwrittenPKsLocked(key.Length(), offset, pkIdx)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
-	for _, colDef := range schema.ColDefs {
-		if colDef.IsPhyAddr() {
+	if key != nil {
+		if err = node.pkIndex.BatchUpsert(key, int(offset)); err != nil {
+			panic(err)
+		}
+	}
+	return nil
+}
+
+func (node *memoryNode) appendPrimaryKey(bat *containers.Batch, source *catalog.Schema) (containers.Vector, int) {
+	schema := node.writeSchema
+	if !schema.HasPK() || schema.IsSecondaryIndexTable() {
+		return nil, 0
+	}
+	pk := schema.GetSingleSortKey()
+	if idx, ok := source.SeqnumMap[pk.SeqNum]; ok && pk.IsRealPrimary() {
+		return bat.GetVectorByName(source.ColDefs[idx].Name), pk.Idx
+	}
+	return nil, 0
+}
+
+func (node *memoryNode) removeOverwrittenPKsLocked(rows int, offset uint32, pkIdx int) error {
+	oldVec := node.data.Vecs[pkIdx]
+	end := min(int(offset)+rows, oldVec.Length())
+	for row := int(offset); row < end; row++ {
+		if oldVec.IsNull(uint64(row)) {
 			continue
 		}
-		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
-			srcPos := slices.Index(bat.Attrs, colDef.Name)
-			if srcPos < 0 {
-				continue
-			}
-			if err = node.pkIndex.BatchUpsert(
-				bat.Vecs[srcPos], int(offset)); err != nil {
-				panic(err)
-			}
+		if err := node.pkIndex.DeleteAt(oldVec.GetValue(row), uint32(row)); err != nil {
+			return err
 		}
 	}
 	return nil

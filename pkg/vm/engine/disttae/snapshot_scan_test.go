@@ -25,9 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
@@ -525,6 +528,103 @@ func TestScanSnapshotWithCurrentRangesUsesRangePartitionState(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int64{7}, gotIDs)
+}
+
+func TestScanSnapshotWithCurrentRangesColumnReadSpec(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewLocalFS(ctx, "snapshot", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	intType, boolType := types.T_int64.ToType(), types.T_bool.ToType()
+	def := &plan.TableDef{
+		FeatureFlag: features.SchemaEvolved,
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: intType.PlanType()},
+			{Name: "payload", Seqnum: 1, Typ: intType.PlanType()},
+			{Name: "extra", Seqnum: 2, Typ: boolType.PlanType(), Default: &plan.Default{NullAbility: true}},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1, "extra": 2},
+	}
+	snapshotTS := types.BuildTS(20, 0)
+	op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	op.EXPECT().SnapshotTS().Return(types.BuildTS(30, 0).ToTimestamp()).AnyTimes()
+	tbl := &txnTable{tableId: 42, tableDef: def, db: &txnDatabase{op: op}, eng: &Engine{fs: fs}}
+
+	for _, tc := range []struct {
+		name      string
+		persisted bool
+		hole      bool
+	}{
+		{name: "persisted_tail", persisted: true},
+		{name: "persisted_hole", persisted: true, hole: true},
+		{name: "committed_tail"},
+		{name: "committed_hole", hole: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attr, typ := "extra", boolType
+			if tc.hole {
+				attr, typ = "payload", intType
+			}
+			var relData *readutil.BlockListRelData
+			if tc.persisted {
+				data := batch.NewWithSize(2)
+				defer data.Clean(mp)
+				data.Vecs[0] = vector.NewVec(intType, mp)
+				require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(7), false, mp))
+				seq := uint16(1)
+				if tc.hole {
+					seq = 2
+					data.Vecs[1] = vector.NewVec(boolType, mp)
+					require.NoError(t, vector.AppendFixed(data.Vecs[1], true, false, mp))
+				} else {
+					data.Vecs[1] = vector.NewVec(intType, mp)
+					require.NoError(t, vector.AppendFixed(data.Vecs[1], int64(70), false, mp))
+				}
+				data.SetRowCount(1)
+				writer := ioutil.ConstructWriter(0, []uint16{0, seq}, -1, false, false, fs)
+				_, err := writer.WriteBatch(data)
+				require.NoError(t, err)
+				_, _, err = writer.Sync(ctx)
+				require.NoError(t, err)
+				stats := writer.GetObjectStats()
+				relData = readutil.NewBlockListRelationData(0, readutil.WithPartitionState(newTestMaterializedSnapshotPartitionState(t, mp, nil)))
+				relData.SetBlockList(objectio.ObjectStatsToBlockInfoSlice(&stats, false))
+			} else {
+				state := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
+					{rowID: buildTestMaterializedSnapshotRowID(t, 1), ts: types.BuildTS(10, 0), id: 7, payload: 70},
+				})
+				iter := state.NewRowsIter(snapshotTS, nil, false)
+				defer iter.Close()
+				require.True(t, iter.Next())
+				entry := iter.Entry()
+				defer entry.Batch.Clean(mp)
+				if tc.hole {
+					entry.Batch.Attrs[3] = ""
+				}
+				relData = readutil.NewBlockListRelationData(0, readutil.WithPartitionState(state))
+			}
+
+			rows := 0
+			err := ScanSnapshotWithCurrentRanges(ctx, t.Name(), tbl, relData, snapshotTS,
+				[]string{"id", attr}, []types.Type{intType, typ}, nil, 1, mp,
+				func(bat *batch.Batch) error {
+					rows += bat.RowCount()
+					require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+					require.Equal(t, typ, *bat.Vecs[1].GetType())
+					require.True(t, bat.Vecs[1].IsNull(0))
+					return nil
+				})
+			if tc.hole {
+				require.ErrorContains(t, err, "layout")
+				require.Zero(t, rows)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, rows)
+			}
+		})
+	}
 }
 
 func TestCollectSnapshotScanTombstonesUsesProvidedState(t *testing.T) {

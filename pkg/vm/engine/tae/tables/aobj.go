@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -271,12 +272,10 @@ func (obj *aobject) ApplyDebugBatch(bat *containers.Batch, txn txnif.AsyncTxn) (
 	if create {
 		ans = append(ans, an)
 	}
-	tmpAttrs := bat.Attrs
-	bat.Attrs = tmpAttrs[:len(tmpAttrs)-1]
-	if _, err = mnode.ApplyAppendLocked(bat); err != nil {
-		return
-	}
-	bat.Attrs = tmpAttrs
+	payload := *bat
+	payload.Attrs = bat.Attrs[:len(bat.Attrs)-1]
+	payload.Vecs = bat.Vecs[:len(bat.Vecs)-1]
+	_, err = mnode.ApplyAppendLocked(&payload, nil)
 	return
 }
 func (obj *aobject) Contains(
@@ -324,7 +323,12 @@ func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	return
 }
 
-func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, offset uint32) (err error) {
+func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, offset uint32, writeSchema any) (err error) {
+	source, ok := writeSchema.(*catalog.Schema)
+	if !ok || source == nil {
+		return moerr.NewInternalErrorNoCtx("WAL append requires a source schema")
+	}
+	normalizeLegacyCatalogWALTypes(obj.meta.Load().GetTable().ID, bat, source)
 	// MakeAppender returns a lightweight view and does not acquire an object
 	// reference.  Replay owns the appender only for this call, so acquire the
 	// matching reference before Close releases it.
@@ -335,11 +339,40 @@ func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, offset uint32) 
 		return
 	}
 	defer appender.Close()
-	err = appender.ApplyAppendAt(bat, offset, nil)
+	err = appender.ApplyAppendAt(bat, offset, source)
 	if err == nil {
 		obj.meta.Load().GetTable().AddRows(uint64(bat.Length()))
 	}
 	return
+}
+
+// The 4.2 catalog used charset zero for its built-in text columns. The
+// current bootstrap schema declares an explicit UTF8 identity for these
+// columns, but their WAL carries the same bytes and physical vector layout.
+// Keep user-column collations and all other type metadata strict.
+func normalizeLegacyCatalogWALTypes(tableID uint64, bat *containers.Batch, schema *catalog.Schema) {
+	if !pkgcatalog.IsSystemTable(tableID) || len(bat.Attrs) != len(bat.Vecs) {
+		return
+	}
+	for i, name := range bat.Attrs {
+		idx := schema.GetColIdx(name)
+		if idx < 0 || bat.Vecs[i] == nil {
+			continue
+		}
+		expected := schema.ColDefs[idx].Type
+		if expected.Charset != types.CharsetUTF8 {
+			continue
+		}
+		actual := bat.Vecs[i].GetType()
+		if actual.Charset != types.CharsetLegacy {
+			continue
+		}
+		normalized := *actual
+		normalized.Charset = types.CharsetUTF8
+		if expected.Eq(normalized) {
+			*actual = normalized
+		}
+	}
 }
 
 func (obj *aobject) MakeAppender() (appender data.ObjectAppender, err error) {

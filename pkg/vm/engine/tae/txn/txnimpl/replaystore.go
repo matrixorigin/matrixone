@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -44,6 +46,7 @@ type replayTxnStore struct {
 	ctx            context.Context
 	preparedTables map[uint64]*catalog.TableEntry
 	preparedTxnID  string
+	checkpointEnd  types.TS
 }
 
 func MakeReplayTxn(
@@ -54,12 +57,14 @@ func MakeReplayTxn(
 	cmd *txnbase.TxnCmd,
 	observer wal.ReplayObserver,
 	catalog *catalog.Catalog,
+	checkpointEnd types.TS,
 ) *txnbase.Txn {
 	store := &replayTxnStore{
-		Cmd:      cmd,
-		Observer: observer,
-		catalog:  catalog,
-		ctx:      ctx,
+		Cmd:           cmd,
+		Observer:      observer,
+		catalog:       catalog,
+		ctx:           ctx,
+		checkpointEnd: checkpointEnd,
 	}
 	txn := txnbase.NewPersistedTxn(
 		mgr,
@@ -85,7 +90,7 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 	store.Observer.OnTimeStamp(txn.GetPrepareTS())
 	for _, command := range store.Cmd.Cmds {
 		command.SetReplayTxn(txn)
-		store.prepareCmd(command)
+		store.prepareCmd(command, txn)
 	}
 	store.registerPreparedDMLTables(txn)
 	return
@@ -146,7 +151,7 @@ func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {
 		txn.String()))
 }
 
-func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
+func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, txn txnif.TxnReader) {
 	if txncmd.GetType() != txnbase.IOET_WALTxnEntry {
 		common.DoIfDebugEnabled(func() {
 			logutil.Debug(
@@ -164,15 +169,14 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.BlockNode]:
 		store.catalog.ReplayCmd(txncmd, store.Observer)
 	case *AppendCmd:
-		store.replayAppendData(
-			cmd, store.Observer)
+		store.replayAppendData(cmd, txn, store.Observer)
 	case *updates.UpdateCmd:
 		store.replayDataCmds(
 			cmd, store.Observer)
 	}
 }
 
-func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, txn txnif.TxnReader, observer wal.ReplayObserver) {
 	hasActive := false
 	_, sarg, _ := fault.TriggerFault("replay debug log")
 	for _, info := range cmd.Infos {
@@ -223,17 +227,95 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if blk.ObjectPersisted() {
 			continue
 		}
+		table := blk.GetTable()
+		source, previous, fromCheckpoint := table.GetReplayAppendSchemas(txn, cmd.IsTombstone)
+		if source == nil {
+			panic(moerr.NewInternalErrorNoCtxf("no visible WAL append schema for table %d at %s",
+				id.TableID, txn.GetStartTS().ToString()))
+		}
+		if !cmd.IsTombstone {
+			// New appends across a rename use PrepareTS names in physical
+			// sequence order. With a checkpoint the StartTS version may
+			// have collapsed to this very schema.
+			prepared := table.GetAppendSchemaAtPrepare(txn)
+			if prepared != nil && prepared != source && sameAppendColumnLayout(source, prepared) &&
+				walColumnsInSchemaOrder(data.Attrs, prepared) {
+				source = prepared
+				fromCheckpoint = false
+			}
+		}
+		if previous != nil && !walColumnsInSchemaOrder(data.Attrs, source) &&
+			isLegacyRenameAppend(data.Attrs, previous, source) {
+			source = previous
+			fromCheckpoint = false
+		}
 		start := info.GetSrcOff()
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
-		if err = blk.GetObjectData().OnReplayAppendPayload(bat, info.GetDestOff()); err != nil || sarg != "" {
+		startTS := txn.GetStartTS()
+		if fromCheckpoint && !pkgcatalog.IsSystemTable(table.ID) && startTS.LT(&store.checkpointEnd) &&
+			!walColumnsInSchemaOrder(bat.Attrs, source) {
+			if err = recoverCheckpointAppendNames(bat, source); err != nil {
+				panic(moerr.NewInternalErrorNoCtxf("cannot resolve WAL append columns for table %d (checkpoint schema version %d): %v",
+					id.TableID, source.Version, err))
+			}
+		}
+		if err = blk.GetObjectData().OnReplayAppendPayload(bat, info.GetDestOff(), source); err != nil || sarg != "" {
 			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
 			if sarg == "" {
 				panic(err)
 			}
 		}
 	}
+}
+
+// Legacy WAL writes every column in schema order. If recovery has only the
+// checkpoint's renamed schema, a complete ordinal layout proves that no
+// sequence could have been retired or inserted since the writer's snapshot:
+// an ADD would change the width, and a DROP would leave a sequence gap or a
+// larger allocation watermark. Sparse and evolved layouts require the source
+// schema. Reject an unproven mapping even if all names and types match,
+// because a rename can permute names without changing the physical layout.
+func recoverCheckpointAppendNames(bat *containers.Batch, schema *catalog.Schema) error {
+	n := len(schema.ColDefs)
+	if schema.Version == 0 || schema.ColumnReadSpec() != nil ||
+		schema.PhyAddrKey == nil || schema.PhyAddrKey.Idx != n-1 ||
+		int(schema.Extra.NextColSeqnum) != n-1 || len(bat.Attrs) != n || len(bat.Vecs) != n ||
+		len(bat.Nameidx) != n || bat.Attrs[n-1] != schema.PhyAddrKey.Name {
+		return moerr.NewInternalErrorNoCtx("cannot prove a complete dense WAL column layout")
+	}
+	for i, col := range schema.ColDefs {
+		pos, ok := bat.Nameidx[bat.Attrs[i]]
+		if !ok || pos != i || bat.Attrs[i] == "" || bat.Vecs[i] == nil ||
+			!col.Type.Eq(*bat.Vecs[i].GetType()) || (!col.PhyAddr && int(col.SeqNum) != i) {
+			return moerr.NewInternalErrorNoCtxf("invalid WAL column layout at position %d", i)
+		}
+	}
+	clear(bat.Nameidx)
+	for i, col := range schema.ColDefs {
+		bat.Attrs[i] = col.Name
+		bat.Nameidx[col.Name] = i
+	}
+	return nil
+}
+
+func walColumnsInSchemaOrder(attrs []string, schema *catalog.Schema) bool {
+	if len(attrs) != len(schema.ColDefs) {
+		return false
+	}
+	for i, attr := range attrs {
+		if attr != schema.ColDefs[i].Name {
+			return false
+		}
+	}
+	return true
+}
+
+// Older writers could leave buffered rows under their original names after
+// their own rename. Require the complete ordered layout, including the row ID.
+func isLegacyRenameAppend(attrs []string, previous, current *catalog.Schema) bool {
+	return sameAppendColumnLayout(previous, current) && walColumnsInSchemaOrder(attrs, previous)
 }
 
 func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {

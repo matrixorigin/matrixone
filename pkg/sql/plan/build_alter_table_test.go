@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -2823,4 +2824,15 @@ func TestAlterBinaryConversionUsesFinalCombinedSchema(t *testing.T) {
 			require.Equal(t, before, after)
 		})
 	}
+}
+
+func TestSchemaEvolutionCopyClearsFeature(t *testing.T) {
+	table := &plan.TableDef{
+		Name: "t1", FeatureFlag: features.SchemaEvolved, Pkey: &plan.PrimaryKeyDef{},
+		Cols: []*plan.ColDef{{Name: "flag", OriginName: "flag", Typ: types.T_bool.ToType().PlanType(), Seqnum: 7}},
+	}
+	copied, err := buildCopyTableDef(t.Context(), table)
+	require.NoError(t, err)
+	require.False(t, features.IsSchemaEvolved(copied.FeatureFlag))
+	require.True(t, features.IsSchemaEvolved(table.FeatureFlag))
 }

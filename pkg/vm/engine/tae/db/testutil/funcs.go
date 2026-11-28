@@ -183,6 +183,19 @@ func DropRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database, 
 	if err != nil {
 		return err
 	}
+	return deleteRelationCatalogRows(ctx, txn, db, rel.Schema(false).(*catalog.Schema))
+}
+
+// ReplaceRelationCatalogRows records the catalog DML that accompanies a CN
+// schema change. A checkpoint rebuilds the table from these rows.
+func ReplaceRelationCatalogRows(ctx context.Context, txn txnif.AsyncTxn, db handle.Database, rel handle.Relation, previous *catalog.Schema) error {
+	if err := deleteRelationCatalogRows(ctx, txn, db, previous); err != nil {
+		return err
+	}
+	return appendRelationCatalogRows(ctx, txn, rel, rel.Schema(false).(*catalog.Schema))
+}
+
+func deleteRelationCatalogRows(ctx context.Context, txn txnif.AsyncTxn, db handle.Database, schema *catalog.Schema) error {
 	catalogdb, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
 		return err
@@ -199,16 +212,16 @@ func DropRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database, 
 	defer packer.Close()
 	packer.EncodeUint32(txn.GetTenantID())
 	packer.EncodeStringType([]byte(db.GetName()))
-	packer.EncodeStringType([]byte(tblName))
+	packer.EncodeStringType([]byte(schema.Name))
 	if err := tblHandle.DeleteByFilter(ctx, handle.NewEQFilter(packer.Bytes())); err != nil {
 		return err
 	}
 
-	for _, col := range rel.Schema(false).(*catalog.Schema).ColDefs {
+	for _, col := range schema.ColDefs {
 		packer.Reset()
 		packer.EncodeUint32(txn.GetTenantID())
 		packer.EncodeStringType([]byte(db.GetName()))
-		packer.EncodeStringType([]byte(tblName))
+		packer.EncodeStringType([]byte(schema.Name))
 		packer.EncodeStringType([]byte(col.Name))
 		if err := colHandle.DeleteByFilter(ctx, handle.NewEQFilter(packer.Bytes())); err != nil {
 			return err
@@ -222,18 +235,25 @@ func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database
 	if err != nil {
 		return nil, err
 	}
+	if err := appendRelationCatalogRows(ctx, txn, rel, schema); err != nil {
+		return nil, err
+	}
+	return rel, nil
+}
+
+func appendRelationCatalogRows(ctx context.Context, txn txnif.AsyncTxn, rel handle.Relation, schema *catalog.Schema) error {
 	relEntry := rel.GetMeta().(*catalog.TableEntry)
 	catalogdb, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tblHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_TABLES_ID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	colHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	bat := makeRespBatchFromSchema(catalog.SystemTableSchema)
@@ -245,7 +265,7 @@ func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database
 		txnimpl.FillTableRow(relEntry, schema, def.Name, bat.Vecs[def.Idx])
 	}
 	if err := tblHandle.Append(ctx, bat); err != nil {
-		return nil, err
+		return err
 	}
 	colBat := makeRespBatchFromSchema(catalog.SystemColumnSchema)
 	defer colBat.Close()
@@ -256,10 +276,7 @@ func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database
 		txnimpl.FillColumnRow(relEntry, schema, def.Name, colBat.Vecs[def.Idx])
 	}
 
-	if err := colHandle.Append(ctx, colBat); err != nil {
-		return nil, err
-	}
-	return rel, nil
+	return colHandle.Append(ctx, colBat)
 }
 
 func CreateRelationAndAppend2(

@@ -271,60 +271,65 @@ func (node *memoryNode) getDataWindowLocked(
 		panic("not expect")
 		// bat.Deletes = bat.WindowDeletes(int(from), int(to-from), false)
 	}
-	if *bat == nil {
+	spec := readSchema.ColumnReadSpec()
+	var maxSeqnum uint16
+	if spec != nil {
+		maxSeqnum = node.writeSchema.MaxSeqnum()
+	}
+	fresh := *bat == nil
+	if fresh {
 		*bat = containers.NewBatchWithCapacity(len(colIdxes))
-		for _, colIdx := range colIdxes {
-			if colIdx == objectio.SEQNUM_COMMITTS {
-				typ := types.T_TS.ToType()
-				vec := node.object.rt.VectorPool.Transient.GetVector(&typ)
-				(*bat).AddVector(objectio.TombstoneAttr_CommitTs_Attr, vec)
-				continue
-			}
-			if colIdx == objectio.SEQNUM_ABORT {
-				typ := types.T_bool.ToType()
-				vec := node.object.rt.VectorPool.Transient.GetVector(&typ)
-				(*bat).AddVector(objectio.TombstoneAttr_Abort_Attr, vec)
-				continue
-			}
-			colDef := readSchema.ColDefs[colIdx]
-			idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
-			var vec containers.Vector
-			if !ok {
-				vec = node.object.rt.VectorPool.Transient.GetVector(&colDef.Type) // TODO
-				for i := from; i < to; i++ {
-					if err = vector.AppendAny(vec, nil, true, vec.MPool()); err != nil {
-						containers.ReleaseVector(vec)
-						return
-					}
-				}
-			} else {
-				if vec, err = node.object.rt.VectorPool.Transient.CloneWindow(node.data.Vecs[idx], int(from), int(to-from)); err != nil {
-					return
-				}
-			}
-			(*bat).AddVector(colDef.Name, vec)
-		}
-	} else {
-		for _, colIdx := range colIdxes {
-			if colIdx == objectio.SEQNUM_COMMITTS || colIdx == objectio.SEQNUM_ABORT {
-				continue
-			}
-			colDef := readSchema.ColDefs[colIdx]
-			idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
-			var vec containers.Vector
-			if !ok {
-				vec = vector.NewConstNull(colDef.Type, int(to-from), mp)
-				dst := (*bat).GetVectorByName(colDef.Name)
-				err = dst.UnionBatch(vec, 0, vec.Length(), nil, dst.MPool()) // TODO
-				vec.Free(mp)
-			} else {
-				src := node.data.Vecs[idx]
-				dst := (*bat).GetVectorByName(colDef.Name)
-				err = dst.UnionBatch(src, 0, src.Length(), nil, dst.MPool())
-			}
+		defer func() {
 			if err != nil {
-				return
+				(*bat).Close()
+				*bat = nil
 			}
+		}()
+	}
+	pool := node.object.rt.VectorPool.Transient
+	rows := int(to - from)
+	for _, colIdx := range colIdxes {
+		switch colIdx {
+		case objectio.SEQNUM_COMMITTS:
+			if fresh {
+				typ := types.T_TS.ToType()
+				(*bat).AddVector(objectio.TombstoneAttr_CommitTs_Attr, pool.GetVector(&typ))
+			}
+			continue
+		case objectio.SEQNUM_ABORT:
+			if fresh {
+				typ := types.T_bool.ToType()
+				(*bat).AddVector(objectio.TombstoneAttr_Abort_Attr, pool.GetVector(&typ))
+			}
+			continue
+		}
+		col := readSchema.ColDefs[colIdx]
+		idx, present := node.writeSchema.SeqnumMap[col.SeqNum]
+		switch spec.Classify(col.SeqNum, maxSeqnum, present) {
+		case objectio.ColPhysical:
+			src := node.data.Vecs[idx]
+			if fresh {
+				vec, cloneErr := pool.CloneWindow(src, int(from), rows)
+				if cloneErr != nil {
+					return cloneErr
+				}
+				(*bat).AddVector(col.Name, vec)
+			} else {
+				dst := (*bat).GetVectorByName(col.Name)
+				if err = dst.UnionBatch(src, int64(from), rows, nil, dst.MPool()); err != nil {
+					return err
+				}
+			}
+		case objectio.ColVirtualDefault:
+			if fresh {
+				(*bat).AddVector(col.Name, pool.GetVector(&col.Type))
+			}
+			dst := (*bat).GetVectorByName(col.Name)
+			if err = spec.AppendMissingRows(col.SeqNum, dst, rows, dst.MPool()); err != nil {
+				return err
+			}
+		case objectio.ColCorruptedMissing:
+			return moerr.NewInternalErrorNoCtxf("column sequence %d is missing within memory node layout ending at %d", col.SeqNum, maxSeqnum)
 		}
 	}
 	return
@@ -332,14 +337,26 @@ func (node *memoryNode) getDataWindowLocked(
 
 func (node *memoryNode) ApplyAppendLocked(
 	bat *containers.Batch,
+	source *catalog.Schema,
 ) (from int, err error) {
-	schema := node.writeSchema
+	if source == nil {
+		source = node.writeSchema
+	}
+	spec, missing, err := node.validateAppendLayout(bat, source)
+	if err != nil {
+		return 0, err
+	}
 	from = int(node.mustData().Length())
 	rows := bat.Length()
+	if err = node.appendMissingWALColumns(spec, missing, rows); err != nil {
+		return
+	}
 	for srcPos, attr := range bat.Attrs {
-		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := node.data.Vecs[def.Idx]
-		src := bat.Vecs[srcPos]
+		idx := node.appendDestination(source, attr)
+		if idx < 0 {
+			continue
+		}
+		destVec, src := node.data.Vecs[idx], bat.Vecs[srcPos]
 		if err = destVec.UnionBatch(src, 0, src.Length(), nil, destVec.MPool()); err != nil {
 			return
 		}
@@ -350,34 +367,280 @@ func (node *memoryNode) ApplyAppendLocked(
 			return
 		}
 	}
-	// Upgrade compat: replayed WAL batches may be encoded with an older schema
-	// and omit columns introduced later. Pad those missing columns with NULLs
-	// for the appended rows so every in-memory vector stays aligned.
+	// Align remaining legacy columns that have no evolution metadata.
 	err = node.ReserveRowsLocked(uint32(from + rows))
 	return
 }
 
-func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32) (err error) {
+// validateAppendLayout checks the entire source layout before modifying data or
+// the index. A subset of names cannot establish a WAL layout's high-water mark.
+func (node *memoryNode) validateAppendLayout(bat *containers.Batch, source *catalog.Schema) (*objectio.ColumnReadSpec, []*catalog.ColDef, error) {
 	schema := node.writeSchema
-	data := node.mustData()
-	if err = node.ReserveRowsLocked(offset + uint32(bat.Length())); err != nil {
-		return
+	if len(bat.Attrs) == 0 || len(bat.Attrs) != len(bat.Vecs) || bat.Vecs[0] == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("invalid append payload shape")
 	}
-	for srcPos, attr := range bat.Attrs {
-		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := data.Vecs[def.Idx]
-		for row := 0; row < bat.Length(); row++ {
-			if err = destVec.Copy(bat.Vecs[srcPos], int64(int(offset)+row), int64(row), destVec.MPool()); err != nil {
-				return
+	rows := bat.Length()
+	required := 0
+	for pos, name := range bat.Attrs {
+		idx := source.GetColIdx(name)
+		if idx < 0 || source.ColDefs[idx].Name != name {
+			return nil, nil, moerr.NewInternalErrorNoCtxf("unknown append column %q in source schema version %d", name, source.Version)
+		}
+		col := source.ColDefs[idx]
+		vec := bat.Vecs[pos]
+		if mapped, ok := bat.Nameidx[name]; !ok || mapped != pos || vec == nil ||
+			vec.Length() != rows {
+			return nil, nil, moerr.NewInternalErrorNoCtxf("invalid append vector for column %q", name)
+		}
+		if !col.Type.Eq(*vec.GetType()) {
+			return nil, nil, moerr.NewInternalErrorNoCtxf("invalid append vector for column %q: expected type %#v, got %#v", name, col.Type, *vec.GetType())
+		}
+		if !col.PhyAddr {
+			required++
+		}
+		if source != schema {
+			if dst, present := schema.SeqnumMap[col.SeqNum]; present {
+				if !schema.ColDefs[dst].Type.Eq(col.Type) {
+					return nil, nil, moerr.NewInternalErrorNoCtxf("append column %q changed type at sequence %d", name, col.SeqNum)
+				}
+			} else if !col.PhyAddr && uint32(col.SeqNum) >= schema.Extra.NextColSeqnum {
+				return nil, nil, moerr.NewInternalErrorNoCtxf("append column %q at sequence %d was never allocated in the destination schema", name, col.SeqNum)
 			}
 		}
 	}
-	if logicalID := node.legacyLogicalID(bat); logicalID != nil {
-		destVec := data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
-		for row := range bat.Length() {
-			if err = destVec.Copy(logicalID, int64(int(offset)+row), int64(row), destVec.MPool()); err != nil {
-				return
+	expected := len(source.ColDefs)
+	if source.PhyAddrKey != nil {
+		expected--
+	}
+	if required != expected {
+		for _, col := range source.ColDefs {
+			if col.PhyAddr {
+				continue
 			}
+			if pos, present := bat.Nameidx[col.Name]; present && pos >= 0 && pos < len(bat.Attrs) && bat.Attrs[pos] == col.Name {
+				continue
+			}
+			if col.Name == pkgcatalog.SystemRelAttr_LogicalID && node.legacyLogicalID(bat) != nil {
+				continue
+			}
+			return nil, nil, moerr.NewInternalErrorNoCtxf("append column %q is required by source schema version %d", col.Name, source.Version)
+		}
+	}
+	if source == schema {
+		return nil, nil, nil
+	}
+	spec := schema.ColumnReadSpec()
+	var missing []*catalog.ColDef
+	for _, col := range schema.ColDefs {
+		if col.PhyAddr {
+			continue
+		}
+		if _, present := source.SeqnumMap[col.SeqNum]; present {
+			continue
+		}
+		if uint32(col.SeqNum) < source.Extra.NextColSeqnum || col.IsRealPrimary() {
+			return nil, nil, moerr.NewInternalErrorNoCtxf("append column %q at sequence %d is missing inside the source layout", col.Name, col.SeqNum)
+		}
+		if spec != nil {
+			missing = append(missing, col)
+		}
+	}
+	return spec, missing, nil
+}
+
+// appendDestination is called only for columns validated against source.
+func (node *memoryNode) appendDestination(source *catalog.Schema, name string) int {
+	idx := source.GetColIdx(name)
+	if source == node.writeSchema {
+		return idx
+	}
+	if dst, present := node.writeSchema.SeqnumMap[source.ColDefs[idx].SeqNum]; present {
+		return dst
+	}
+	return -1
+}
+
+// appendMissingWALColumns fills absent columns before mutating supplied
+// values. Roll back the fills if an allocation fails.
+func (node *memoryNode) appendMissingWALColumns(spec *objectio.ColumnReadSpec, missing []*catalog.ColDef, rows int) error {
+	if len(missing) == 0 {
+		return nil
+	}
+	checkpoints := make([]vector.AppendCheckpoint, len(missing))
+	for i, col := range missing {
+		vec := node.data.Vecs[col.Idx]
+		checkpoints[i] = vec.MakeAppendCheckpoint()
+		if err := spec.AppendMissingRows(col.SeqNum, vec, rows, vec.MPool()); err != nil {
+			for j, filled := range missing[:i+1] {
+				err = vector.JoinAppendRollbackError(err, node.data.Vecs[filled.Idx].RollbackAppend(checkpoints[j], rows))
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32, source *catalog.Schema, beforeOverwrite func() error) error {
+	if source == nil {
+		source = node.writeSchema
+	}
+	spec, missing, err := node.validateAppendLayout(bat, source)
+	if err != nil {
+		return err
+	}
+	data := node.mustData()
+	rows := bat.Length()
+	if rows == 0 {
+		return nil
+	}
+	start, end := int(offset), int(offset)+rows
+
+	// Keep allocations and other fallible vector writes ahead of the PK change.
+	// A reserved column can be patched in place when its copy cannot allocate.
+	var staged []containers.Vector
+	defer func() {
+		for _, vec := range staged {
+			if vec != nil {
+				containers.ReleaseVector(vec)
+			}
+		}
+	}()
+	stage := func(idx int) (containers.Vector, error) {
+		current := data.Vecs[idx]
+		next, err := containers.CloneVector(current, current.MPool(), nil)
+		if err != nil {
+			return nil, err
+		}
+		if staged == nil {
+			staged = make([]containers.Vector, len(data.Vecs))
+		}
+		staged[idx] = next
+		if err := extendAppendVector(next, end); err != nil {
+			return nil, err
+		}
+		return next, nil
+	}
+	for _, col := range missing {
+		if err := spec.ValidateMissingColumn(col.SeqNum); err != nil {
+			return err
+		}
+		next, err := stage(col.Idx)
+		if err != nil {
+			return err
+		}
+		nsp := next.GetNulls()
+		if err := nulls.TryExpand(nsp, end); err != nil {
+			return err
+		}
+		nsp.AddRange(uint64(start), uint64(end))
+	}
+
+	legacyID := node.legacyLogicalID(bat)
+	sourceVector := func(col *catalog.ColDef) containers.Vector {
+		if pos, ok := source.SeqnumMap[col.SeqNum]; ok {
+			if src, ok := bat.Nameidx[source.ColDefs[pos].Name]; ok {
+				return bat.Vecs[src]
+			}
+		}
+		if col.Name == pkgcatalog.SystemRelAttr_LogicalID {
+			return legacyID
+		}
+		return nil
+	}
+	for idx, col := range node.writeSchema.ColDefs {
+		if staged != nil && staged[idx] != nil {
+			continue
+		}
+		src := sourceVector(col)
+		if canInstallAppendInPlace(data.Vecs[idx], src, end) {
+			continue
+		}
+		next, err := stage(idx)
+		if err != nil {
+			return err
+		}
+		if src != nil {
+			if err := copyAppendRows(next, src, start); err != nil {
+				return err
+			}
+		}
+	}
+	if beforeOverwrite != nil {
+		if err := beforeOverwrite(); err != nil {
+			return err
+		}
+	}
+	for idx, col := range node.writeSchema.ColDefs {
+		if staged != nil && staged[idx] != nil {
+			dst, next := data.Vecs[idx], staged[idx]
+			*dst, *next = *next, *dst
+			continue
+		}
+		dest := data.Vecs[idx]
+		if err := extendAppendVector(dest, end); err != nil {
+			return err
+		}
+		if src := sourceVector(col); src != nil {
+			if err := copyAppendRows(dest, src, start); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func extendAppendVector(dest containers.Vector, end int) error {
+	if grow := end - dest.Length(); grow > 0 {
+		return vector.AppendMultiFixed(dest, byte(0), true, grow, dest.MPool())
+	}
+	return nil
+}
+
+// A patch can use the live vector if its row slots, NULL bitmap and varlena
+// area already have enough capacity. The payload owns separate source backing.
+func canInstallAppendInPlace(dst *vector.Vector, source containers.Vector, end int) bool {
+	hasBitmapRoom := dst.GetNulls().GetBitmap().CapWords() >= (end+63)/64
+	if end > dst.Length() && (dst.Capacity() < end || !hasBitmapRoom) {
+		return false
+	}
+	if source == nil {
+		return true
+	}
+	src := source
+	if !hasBitmapRoom && (src.IsConstNull() || src.GetNulls().Any()) {
+		return false
+	}
+	if len(src.GetArea()) == 0 {
+		return true
+	}
+	area := dst.GetArea()
+	remaining := cap(area) - len(area)
+	if src.IsConst() {
+		return len(src.GetBytesAt(0)) <= remaining/src.Length()
+	}
+	for row := range src.Length() {
+		if !src.IsNull(uint64(row)) {
+			if size := len(src.GetBytesAt(row)); size > types.VarlenaInlineSize {
+				remaining -= size
+				if remaining < 0 {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func copyAppendRows(dest, source containers.Vector, offset int) error {
+	dst, src := dest, source
+	if src.IsConstNull() || src.GetNulls().Any() {
+		if err := nulls.TryExpand(dst.GetNulls(), offset+src.Length()); err != nil {
+			return err
+		}
+	}
+	for row := range src.Length() {
+		if err := dst.Copy(src, int64(offset+row), int64(row), dest.MPool()); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -394,7 +657,11 @@ func (node *memoryNode) legacyLogicalID(bat *containers.Batch) containers.Vector
 	if _, supplied := bat.Nameidx[pkgcatalog.SystemRelAttr_LogicalID]; supplied {
 		return nil
 	}
-	return bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID)
+	if pos, ok := bat.Nameidx[pkgcatalog.SystemRelAttr_ID]; ok && pos >= 0 && pos < len(bat.Attrs) &&
+		bat.Attrs[pos] == pkgcatalog.SystemRelAttr_ID {
+		return bat.Vecs[pos]
+	}
+	return nil
 }
 
 // ReserveRowsLocked pads every vector with NULLs up to rows.
@@ -498,16 +765,8 @@ func (node *memoryNode) Scan(
 	if *bat != nil {
 		rowOffset = (*bat).Length()
 	}
-	err = node.getDataWindowLocked(
-		bat,
-		readSchema,
-		colIdxes,
-		0,
-		selection.MaxRow,
-		mp,
-	)
-	if err != nil {
-		return
+	if err = node.getDataWindowLocked(bat, readSchema, colIdxes, 0, selection.MaxRow, mp); err != nil {
+		return err
 	}
 	for _, idx := range colIdxes {
 		if idx == objectio.SEQNUM_COMMITTS {

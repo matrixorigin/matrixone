@@ -357,6 +357,9 @@ func requireReplayFields(bat *containers.Batch, row int, names ...string) error 
 	return nil
 }
 
+// The synthetic timestamp identifies catalog nodes reconstructed from a checkpoint.
+var checkpointCatalogTS = types.BuildTS(42424242, 0)
+
 // ReplayFromSysTableObjects rebuilds the catalog without retaining raw system
 // table batches. Only owned schemas and their lookup by table identity remain
 // live while columns are read. Replay tasks do not borrow scanner buffers.
@@ -384,8 +387,7 @@ func (catalog *Catalog) ReplayFromSysTableObjects(
 	}
 
 	// Keep checkpoint-created entries before WAL operations that may drop them.
-	panguEpoch := types.BuildTS(42424242, 0)
-	txnNode := &txnbase.TxnMVCCNode{Start: panguEpoch, Prepare: panguEpoch, End: panguEpoch}
+	txnNode := &txnbase.TxnMVCCNode{Start: checkpointCatalogTS, Prepare: checkpointCatalogTS, End: checkpointCatalogTS}
 	if err = scan(ctx, dbTbl, readTxn, func(bat *containers.Batch, row int) error {
 		if err := requireReplayFields(bat, row, pkgcatalog.SystemDBAttr_ID, pkgcatalog.SystemDBAttr_Name); err != nil {
 			return err

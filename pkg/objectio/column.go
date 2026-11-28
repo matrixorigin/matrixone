@@ -35,6 +35,8 @@ const (
 	colMetaDummyOff = zoneMapOff + zoneMapLen
 	colMetaDummyLen = 32
 	colMetaLen      = colMetaDummyOff + colMetaDummyLen
+	// Virtual metadata describes a column absent from the physical layout.
+	virtualColumnMetaLen = colMetaLen + 1
 )
 
 func GetColumnMeta(idx uint16, data []byte) ColumnMeta {
@@ -92,6 +94,16 @@ func (cm ColumnMeta) setLocation(location Extent) {
 
 func (cm ColumnMeta) ZoneMap() ZoneMap {
 	return persistedZoneMapView(cm.rawZoneMap())
+}
+
+func (cm ColumnMeta) IsVirtual() bool { return len(cm) == virtualColumnMetaLen }
+
+// HasExactZoneMapMax excludes historical BOOL bounds that ZoneMap widens
+// for conservative pruning.
+func (cm ColumnMeta) HasExactZoneMapMax() bool {
+	zm := cm.rawZoneMap()
+	maximum := zm.GetMaxBuf()
+	return zm.GetType() != types.T_bool || len(maximum) == 1 && types.DecodeBool(maximum)
 }
 
 // rawZoneMap is used when serializing metadata; compatibility read views must

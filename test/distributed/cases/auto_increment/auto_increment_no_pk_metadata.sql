@@ -3,6 +3,13 @@
 drop database if exists ai_no_pk_meta;
 create database ai_no_pk_meta;
 use ai_no_pk_meta;
+begin;
+create table workspace_ai(id bigint auto_increment primary key, payload bigint);
+insert into workspace_ai(payload) values (42);
+select id, payload from workspace_ai where id = 1;
+commit;
+select id, payload from workspace_ai where id = 1;
+drop table workspace_ai;
 create table no_pk(a int, b varchar(10));
 insert into no_pk values (1, 'x'), (2, 'y'), (3, 'z');
 create table with_pk(a int primary key, b int);

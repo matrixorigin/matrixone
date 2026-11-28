@@ -207,6 +207,7 @@ func readOneBlockWithMeta(
 
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
+	spec := ColumnReadSpecFromContext(ctx)
 	specialLayout := ResolveSpecialColumnLayout(blkmeta)
 	for i, seqnum := range seqnums {
 		// special columns
@@ -227,7 +228,11 @@ func readOneBlockWithMeta(
 		}
 
 		// need fill vector
-		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+		if seqnum > maxSeqnum || seqnum >= blkmeta.GetMetaColumnCount() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+			if spec.Classify(seqnum, maxSeqnum, false) == ColCorruptedMissing {
+				err = moerr.NewInternalErrorNoCtxf("column sequence %d is missing within block layout ending at %d", seqnum, maxSeqnum)
+				return
+			}
 			putFillHolder(i, seqnum)
 			continue
 		}
@@ -283,7 +288,16 @@ func readOneBlockWithMeta(
 			} else {
 				buf := &bytes.Buffer{}
 				buf.Write(EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}))
-				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
+				var vec *vector.Vector
+				if seqnums[i] < SEQNUM_UPPER {
+					vec, err = spec.MaterializeMissingVector(seqnums[i], typs[i], length, m)
+					if err != nil {
+						return
+					}
+				} else {
+					vec = vector.NewConstNull(typs[i], length, m)
+				}
+				if err = vec.MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, buf.Bytes())
