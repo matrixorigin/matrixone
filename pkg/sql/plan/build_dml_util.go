@@ -1382,44 +1382,32 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						lastNodeId = appendSinkScanNodeWithTag(builder, bindCtx, parentActionStep, parentActionTag)
 						builder.positionalSinkScans[lastNodeId] = struct{}{}
 					}
-					// deal with case:  update t1 set a = a.  then do not need to check constraint
+					// A referenced key changing to NULL still has dependents on its old value.
 					if isUpdate {
-						var filterExpr, tmpExpr *Expr
+						unchangedParts := make([]*Expr, 0, len(updateRefColumn))
 						for updateName, newIdx := range updateRefColumn {
 							oldIdx := nameIdxMap[updateName]
-							tmpExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{{
-								Typ: *nameTypMap[updateName],
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										ColPos: oldIdx,
-										Name:   updateName,
-									},
-								},
-							}, {
-								Typ: *nameTypMap[updateName],
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										ColPos: newIdx,
-										Name:   updateName,
-									},
-								},
-							}})
+							typ := *nameTypMap[updateName]
+							equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*Expr{
+								GetColExpr(typ, 0, oldIdx), GetColExpr(typ, 0, newIdx),
+							})
 							if err != nil {
-								return nil
+								return err
 							}
-							if filterExpr == nil {
-								filterExpr = tmpExpr
-							} else {
-								filterExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
-								if err != nil {
-									return nil
-								}
-							}
+							unchangedParts = append(unchangedParts, equal)
+						}
+						unchanged, err := combinePlanConjunction(builder.GetContext(), unchangedParts)
+						if err != nil {
+							return err
+						}
+						changed, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*Expr{unchanged})
+						if err != nil {
+							return err
 						}
 						lastNodeId = builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_FILTER,
 							Children:    []int32{lastNodeId},
-							FilterList:  []*Expr{filterExpr},
+							FilterList:  []*Expr{changed},
 							ProjectList: getProjectionByLastNode(builder, lastNodeId),
 						}, bindCtx)
 					}

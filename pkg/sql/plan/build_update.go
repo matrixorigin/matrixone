@@ -484,7 +484,95 @@ func appendForeignKeyGeneratedUpdate(
 		update.updateColPosMap[col.Name] = rowPositions[i]
 		update.updateColLength++
 	}
-	return last, rowTag, nil
+	last, err = appendGeneratedOutgoingFKChecks(builder, bindCtx, last, rowTag, table, generated, rowPositions)
+	return last, rowTag, err
+}
+
+// Recursive writes trust the triggering FK's assignments. A final outgoing
+// key containing NULL needs no parent match. A changed, non-NULL generated
+// key cannot rely on the triggering FK's check.
+func appendGeneratedOutgoingFKChecks(
+	builder *QueryBuilder, bindCtx *BindContext, last int32, rowTag int32,
+	table *TableDef, generated, rowPositions []int,
+) (int32, error) {
+	var projection []*Expr
+	var assertions []*Expr
+	ctx := builder.GetContext()
+	for _, fk := range table.Fkeys {
+		var generatedName string
+		for _, i := range generated {
+			col := table.Cols[i]
+			if rowPositions[i] != i && slices.Contains(fk.Cols, col.ColId) {
+				generatedName = col.Name
+				break
+			}
+		}
+		if generatedName == "" {
+			continue
+		}
+		if projection == nil {
+			projection = getProjectionByLastNodeWithTag(builder, last, rowTag)
+		}
+		nullableParts := make([]*Expr, 0, len(fk.Cols)+1)
+		unchangedParts := make([]*Expr, 0, len(fk.Cols))
+		for i, col := range table.Cols {
+			if !slices.Contains(fk.Cols, col.ColId) {
+				continue
+			}
+			final := projection[rowPositions[i]]
+			isNull, err := BindFuncExprImplByPlanExpr(ctx, "isnull", []*Expr{DeepCopyExpr(final)})
+			if err != nil {
+				return -1, err
+			}
+			nullableParts = append(nullableParts, isNull)
+			if rowPositions[i] != i {
+				equal, err := bindGeneratedKeyEqual(ctx, DeepCopyExpr(projection[i]), DeepCopyExpr(final), &col.Typ)
+				if err != nil {
+					return -1, err
+				}
+				unchangedParts = append(unchangedParts, equal)
+			}
+		}
+		unchanged, err := combinePlanConjunction(ctx, unchangedParts)
+		if err != nil {
+			return -1, err
+		}
+		allowed, err := combinePlanDisjunction(ctx, append(nullableParts, unchanged))
+		if err != nil {
+			return -1, err
+		}
+		assert, err := bindForeignKeyUpdateAssertion(ctx, allowed,
+			fmt.Sprintf("foreign key action changing generated column '%s' constrained by another foreign key", generatedName))
+		if err != nil {
+			return -1, err
+		}
+		assertions = append(assertions, assert)
+	}
+	if len(assertions) == 0 {
+		return last, nil
+	}
+	if rowTag != 0 {
+		projection = nil // column remapping builds the executable projection
+	}
+	return builder.appendDMLRowFilter(bindCtx, last, assertions, projection), nil
+}
+
+func bindGeneratedKeyEqual(ctx context.Context, oldValue, newValue *Expr, typ *Type) (*Expr, error) {
+	keys := []*Expr{oldValue, newValue}
+	for i, key := range keys {
+		var err error
+		if isGeometryPlanType(typ) {
+			// Preserve the raw WKB, including GEOMETRY32.
+			keys[i], err = forceCastExpr(ctx, key, Type{Id: int32(types.T_blob)})
+		} else {
+			// Reuse the index encoding to preserve exact float and vector bits.
+			keys[i], err = BindFuncExprImplByPlanExpr(ctx, "serial_full", []*Expr{key})
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "<=>", keys)
 }
 
 func appendUnchangedGeneratedKeyCheck(
@@ -493,22 +581,8 @@ func appendUnchangedGeneratedKeyCheck(
 ) (int32, error) {
 	projection := getProjectionByLastNodeWithTag(builder, last, rowTag)
 	value := generatedUpdateExpr(builder, col, projection, rowPositions, false)
-	keys := []*Expr{DeepCopyExpr(projection[colIdx]), value}
 	ctx := builder.GetContext()
-	for i, key := range keys {
-		var err error
-		if isGeometryPlanType(&col.Typ) {
-			// Preserve the raw WKB, including GEOMETRY32.
-			keys[i], err = forceCastExpr(ctx, key, Type{Id: int32(types.T_blob)})
-		} else {
-			// Reuse the index encoding to preserve exact float and vector bits.
-			keys[i], err = BindFuncExprImplByPlanExpr(ctx, "serial_full", []*Expr{key})
-		}
-		if err != nil {
-			return -1, err
-		}
-	}
-	unchanged, err := BindFuncExprImplByPlanExpr(ctx, "<=>", keys)
+	unchanged, err := bindGeneratedKeyEqual(ctx, DeepCopyExpr(projection[colIdx]), value, &col.Typ)
 	if err != nil {
 		return -1, err
 	}
@@ -524,12 +598,6 @@ func appendUnchangedGeneratedKeyCheck(
 
 func unsupportedGeneratedKeyChange(update *dmlPlanCtx, col *ColDef, changesPK bool) string {
 	table := update.tableDef
-	// Recursive writes skip checks on outgoing foreign keys.
-	for _, fk := range table.Fkeys {
-		if slices.Contains(fk.Cols, col.ColId) {
-			return fmt.Sprintf("foreign key action changing generated column '%s' constrained by another foreign key", col.Name)
-		}
-	}
 	if update.preserveUpdateSourceProjection {
 		// REPLACE builds this plan before remapping. The index writer
 		// expects the caller to have already remapped the input.

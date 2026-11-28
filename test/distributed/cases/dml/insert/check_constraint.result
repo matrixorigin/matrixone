@@ -367,4 +367,70 @@ where g = 1 order by id;
 id    pid    g
 10    NULL    1
 11    NULL    1
+create table fk_null_chain_parent(id int primary key);
+create table fk_null_chain_child(
+id int primary key, pid int,
+g int generated always as (pid) stored,
+unique key ug(g),
+foreign key(pid) references fk_null_chain_parent(id) on delete set null
+);
+create table fk_null_chain_leaf(
+id int primary key, ref int,
+foreign key(ref) references fk_null_chain_child(g) on update restrict
+);
+insert into fk_null_chain_parent values (1), (2);
+insert into fk_null_chain_child(id, pid) values (10, 1), (20, 2);
+insert into fk_null_chain_leaf values (100, 1);
+delete from fk_null_chain_parent where id in (1, 2);
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+select id from fk_null_chain_parent order by id;
+id
+1
+2
+select id, pid, g from fk_null_chain_child order by id;
+id    pid    g
+10    1    1
+20    2    2
+select id, ref from fk_null_chain_leaf;
+id    ref
+100    1
+delete from fk_null_chain_parent where id = 2;
+select id, pid, g from fk_null_chain_child order by id;
+id    pid    g
+10    1    1
+20    NULL    NULL
+create table fk_outgoing_null_parent(id int primary key);
+create table fk_outgoing_null_ref(id int primary key);
+create table fk_outgoing_null_child(
+id int primary key, pid int,
+g int generated always as (pid) stored,
+key idx_outgoing_g(g),
+foreign key(pid) references fk_outgoing_null_parent(id) on delete set null,
+foreign key(g) references fk_outgoing_null_ref(id)
+);
+insert into fk_outgoing_null_parent values (1);
+insert into fk_outgoing_null_ref values (1);
+insert into fk_outgoing_null_child(id, pid) values (10, 1);
+delete from fk_outgoing_null_parent where id = 1;
+select id from fk_outgoing_null_parent;
+id
+select id, pid, g from fk_outgoing_null_child;
+id    pid    g
+10    NULL    NULL
+select id from fk_outgoing_null_child force index(idx_outgoing_g) where g = 1;
+id
+create table fk_outgoing_tuple_parent(id int primary key);
+create table fk_outgoing_tuple_ref(a int, b int, primary key(a, b));
+create table fk_outgoing_tuple_child(
+id int primary key, pid int, b int,
+g int generated always as (ifnull(pid, 99)) stored,
+foreign key(pid) references fk_outgoing_tuple_parent(id) on delete set null,
+foreign key(g, b) references fk_outgoing_tuple_ref(a, b)
+);
+insert into fk_outgoing_tuple_parent values (1);
+insert into fk_outgoing_tuple_child(id, pid, b) values (10, 1, null);
+delete from fk_outgoing_tuple_parent where id = 1;
+select id, pid, g, b from fk_outgoing_tuple_child;
+id    pid    g    b
+10    NULL    99    NULL
 drop database check_constraint_test;
