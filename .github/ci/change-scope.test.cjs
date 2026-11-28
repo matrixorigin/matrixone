@@ -143,14 +143,22 @@ function workflowJobs(filename) {
 
 const entrypointJobs = () => workflowJobs('entrypoint.yaml');
 
-test('Coverage stays in this run with a pinned native workflow and the release opt-in', () => {
-  const job = entrypointJobs()['matrixone-ut-coverage'];
-  assert.match(job, /^    uses: matrixorigin\/CI\/\.github\/workflows\/coverage-ut\.yaml@[0-9a-f]{40}$/m);
-  assert.match(job, /^      enable_4_2_dev: \$\{\{ github\.base_ref == '4\.2-dev' \}\}$/m);
-  assert.match(job, /^      runner_pool: \$\{\{ vars\.MO_COVERAGE_RUNNER_POOL \|\| 'cs' \}\}$/m);
-  assert.match(job, /^      bvt_generation: \$\{\{ needs\.preflight\.outputs\.generation \}\}$/m);
-  assert.match(job, /^      contents: read\n      pull-requests: read$/m);
-  assert.doesNotMatch(job, /actions: write|enable_cs_site_retry/);
+test('coverage standby opts in only for the 4.2-dev base and pins the worker protocol', () => {
+  const dispatcher = workflowJobs('coverage-rollout.yaml').standby;
+  assert.match(dispatcher, /^      enable_4_2_dev: \$\{\{ github\.base_ref == '4\.2-dev' \}\}$/m);
+  const worker = workflowJobs('coverage-standby-worker.yaml');
+  const calls = [
+    [dispatcher, 'coverage-ut-standby'],
+    [worker.cs, 'coverage-worker-cs'],
+    [worker.idc, 'coverage-worker-idc'],
+  ];
+  const pins = calls.map(([job, expected]) => {
+    const call = job.match(/^    uses: matrixorigin\/CI\/\.github\/workflows\/([\w-]+)\.yaml@([0-9a-f]{40})$/m);
+    assert.ok(call, `expected an immutable ${expected} workflow reference`);
+    assert.equal(call[1], expected);
+    return call[2];
+  });
+  assert.equal(new Set(pins).size, 1, 'update the dispatcher and both worker pins together');
 });
 
 test('actual preflight applies main-only SDK policy to routing and the required check', async () => {
@@ -342,7 +350,7 @@ test('preflight runs classification only for valid modern PRs and plans only BVT
     }
   }
   assert.match(block, /pr_valid: \$\{\{ steps.check_pr_valid.outputs.pull_valid \}\}/);
-  for (const output of ['compose_group', 'launch_group', 'generation']) {
+  for (const output of ['compose_group', 'launch_group', 'generation', 'native_coverage']) {
     assert.ok(block.includes(`${output}: \u0024{{ steps.plan.outputs.${output} }}`));
   }
   for (const [job, jobBlock] of Object.entries(entrypointJobs())) {
@@ -352,6 +360,49 @@ test('preflight runs classification only for valid modern PRs and plans only BVT
       assert.match(jobBlock, /needs.preflight.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev'/);
     }
   }
+});
+
+test('Coverage rollout is opt-in and selects exactly one route', () => {
+  const preflight = entrypointJobs().preflight;
+  const plan = preflight.split('      - id: plan\n')[1].split('        run: |\n')[1]
+    .replaceAll(/\$\{\{ github\.(?:run_attempt|run_id) \}\}/g, '1');
+  const route = workflowJobs('coverage-rollout.yaml');
+  const cases = [
+    ['main', '', '32000', false],
+    ['main', 'wrong', '32000', false],
+    ['main', '32100', '32000', false],
+    ['main', '32000', '32000', true],
+    ['4.2-dev', '32000', '32000', true],
+    ['4.2-dev', 'shared', '32000', true],
+    ['main', 'shared', '32000', true],
+    ['v4.2.8-hotfix', 'shared', '32000', false],
+    ['3.0-dev', '32000', '32000', false],
+    ['main', '', '', false],
+  ];
+  for (const [base, setting, pr, expected] of cases) {
+    const directory = mkdtempSync(join(tmpdir(), 'coverage-rollout-'));
+    try {
+      const output = join(directory, 'output');
+      const result = spawnSync('bash', ['-c', plan], {
+        encoding: 'utf8',
+        env: { ...process.env, BASE_REF: base, COVERAGE_ROLLOUT: setting, PR_NUMBER: pr,
+          GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: join(directory, 'summary') },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const native = readFileSync(output, 'utf8').includes('native_coverage=true\n');
+      assert.equal(native, expected, JSON.stringify({ base, setting, pr }));
+      for (const name of ['standby', 'native']) {
+        const ifValue = route[name].match(/^    if: (.*)$/m)[1];
+        const condition = ifValue.replace(/^\u0024\{\{ | \}\}$/g, '');
+        assert.equal(runInNewContext(condition, { inputs: { native } }), name === (expected ? 'native' : 'standby'));
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+  assert.match(entrypointJobs()['matrixone-ut-coverage'], /needs\.preflight\.outputs\.native_coverage == 'true'/);
+  assert.match(route.standby, /actions: write/);
+  assert.match(route.native, /actions: read/);
 });
 
 test('trusted control jobs share the configurable runner while PR diff and test jobs stay separate', () => {

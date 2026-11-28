@@ -1,0 +1,49 @@
+name: Coverage rollout
+on:
+  workflow_call:
+    inputs:
+      native:
+        type: boolean
+        required: true
+      bvt_generation:
+        type: string
+        required: true
+    outputs:
+      coverage_ready:
+        value: ${{ jobs.native.outputs.coverage_ready || jobs.standby.outputs.coverage_ready }}
+      coverage_status:
+        value: ${{ jobs.native.outputs.coverage_status || jobs.standby.outputs.coverage_status }}
+
+jobs:
+  standby:
+    if: ${{ !inputs.native }}
+    permissions:
+      contents: read
+      actions: write
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@f64bda11be08c41efc47705acaa41dfe2795d5f5
+    with:
+      bvt_generation: ${{ inputs.bvt_generation }}
+      enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
+      enable_cs_site_retry: ${{ github.base_ref == 'main' && github.event.pull_request.number == 32922 }}
+    secrets: inherit
+
+  native:
+    if: inputs.native
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@0c56a221c359305c20270aeb9af6b64172d6a1a6
+    with:
+      bvt_generation: ${{ inputs.bvt_generation }}
+      enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
+    secrets:
+      COVERAGE_PR_READ_TOKEN: ${{ secrets.COVERAGE_PR_READ_TOKEN }}
+      TEST_S3FS_ALIYUN: ${{ secrets.TEST_S3FS_ALIYUN }}
+      TEST_S3FS_QCLOUD: ${{ secrets.TEST_S3FS_QCLOUD }}
+      S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
+      S3REGION: ${{ secrets.S3REGION }}
+      S3APIKEY: ${{ secrets.S3APIKEY }}
+      S3APISECRET: ${{ secrets.S3APISECRET }}
+      S3BUCKET: ${{ secrets.S3BUCKET }}
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
