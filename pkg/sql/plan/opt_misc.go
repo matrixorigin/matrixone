@@ -154,8 +154,15 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	default:
+		childParentType := node.NodeType
+		if parentType == plan.Node_UNKNOWN {
+			if _, boundToRowImage := builder.dmlRowFilters[nodeID]; boundToRowImage {
+				// Carry the caller's projection boundary through row validation.
+				childParentType = parentType
+			}
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr

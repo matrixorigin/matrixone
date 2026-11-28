@@ -94,7 +94,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
 
 		lastNodeId = appendSinkScanNode(builder, deleteBindCtx, sourceStep)
-		lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx, lastNodeId)
+		lastNodeId, err = makePreUpdateDeletePlan(builder, deleteBindCtx, delPlanCtx, lastNodeId, false)
 		if err != nil {
 			return nil, err
 		}

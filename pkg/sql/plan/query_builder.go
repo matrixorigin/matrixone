@@ -2557,7 +2557,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var newProjList []*plan.Expr
 		if _, preserve := builder.preserveScanProjection[nodeID]; preserve {
 			for i := range node.ProjectList {
-				colRefCnt[[2]int32{tag, int32(i)}] = 1
+				// Pin the scan slot without discarding references from
+				// validation filters and their consumers.
+				ref := [2]int32{tag, int32(i)}
+				colRefCnt[ref] = max(1, colRefCnt[ref])
 			}
 		}
 

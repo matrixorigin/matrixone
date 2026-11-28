@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sort"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -406,12 +408,7 @@ func appendGeneratedUpdateColumn(
 			expr.GetCol().RelPos = inputTag
 		}
 	}
-	lookup := make([]*Expr, len(rowPositions))
-	for i, pos := range rowPositions {
-		lookup[i] = input[pos]
-	}
-	value := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), isIgnore)
-	value = substituteColRefsInExpr(value, lookup, 0)
+	value := generatedUpdateExpr(builder, col, input, rowPositions, isIgnore)
 	valuePos := len(input)
 	node := &Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{last}, ProjectList: append(input, value),
@@ -423,9 +420,18 @@ func appendGeneratedUpdateColumn(
 	return last, valuePos
 }
 
+func generatedUpdateExpr(builder *QueryBuilder, col *ColDef, input []*Expr, rowPositions []int, isIgnore bool) *Expr {
+	lookup := make([]*Expr, len(rowPositions))
+	for i, pos := range rowPositions {
+		lookup[i] = input[pos]
+	}
+	value := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), isIgnore)
+	return substituteColRefsInExpr(value, lookup, 0)
+}
+
 func appendForeignKeyGeneratedUpdate(
 	builder *QueryBuilder, bindCtx *BindContext, last int32, rowTag int32, update *dmlPlanCtx,
-) (int32, error) {
+) (int32, int32, error) {
 	table := update.tableDef
 	hasGenerated := false
 	for _, col := range table.Cols {
@@ -434,12 +440,13 @@ func appendForeignKeyGeneratedUpdate(
 		}
 		hasGenerated = true
 		if _, assigned := update.updateColPosMap[col.Name]; assigned {
-			return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
+			last, err := appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
 				fmt.Sprintf("foreign key action assigning to generated column '%s'", col.Name))
+			return last, rowTag, err
 		}
 	}
 	if !hasGenerated {
-		return last, nil
+		return last, rowTag, nil
 	}
 
 	names := make([]string, 0, len(update.updateColPosMap))
@@ -448,7 +455,7 @@ func appendForeignKeyGeneratedUpdate(
 	}
 	generated, err := affectedGeneratedColumns(table, names)
 	if err != nil || len(generated) == 0 {
-		return last, err
+		return last, rowTag, err
 	}
 	rowPositions := make([]int, len(table.Cols))
 	for i, col := range table.Cols {
@@ -459,52 +466,94 @@ func appendForeignKeyGeneratedUpdate(
 	}
 	for _, i := range generated {
 		col := table.Cols[i]
-		// Recursive writes trust the triggering FK's assignments and skip
-		// outgoing FK checks. A derived value has no such guarantee.
-		for _, fk := range table.Fkeys {
-			if slices.Contains(fk.Cols, col.ColId) {
-				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
-					fmt.Sprintf("foreign key action changing generated column '%s' constrained by another foreign key", col.Name))
-			}
-		}
 		changesPK := table.Pkey != nil && slices.Contains(table.Pkey.Names, col.Name)
-		if update.preserveUpdateSourceProjection {
-			// REPLACE binds these writes before column remapping. The legacy
-			// index writer expects a positional plan that is already remapped.
-			for _, index := range table.Indexes {
-				if !index.TableExist {
-					continue
-				}
-				for _, part := range index.Parts {
-					if catalog.ResolveAlias(part) == col.Name {
-						return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
-							"REPLACE foreign key action changing an indexed generated column")
-					}
-				}
+		if reason := unsupportedGeneratedKeyChange(update, col, changesPK); reason != "" {
+			// After this assertion, later columns and the writer can use the
+			// existing value. Keep the key out of the index update assignments.
+			last, err = appendUnchangedGeneratedKeyCheck(builder, bindCtx, last, rowTag, col, i, rowPositions, reason)
+			if err != nil {
+				return -1, rowTag, err
 			}
-			if changesPK {
-				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
-					"REPLACE foreign key action changing a generated primary key")
-			}
+			continue
 		}
-		if changesPK {
-			if slices.ContainsFunc(table.Indexes, isSyncMaintainedIrregularIndex) {
-				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, rowTag, update.rowIdPos,
-					"update primary key on a table with a synchronous full-text/vector index")
-			}
-			update.updatePkCol = true
-		}
-	}
-	for _, i := range generated {
-		col := table.Cols[i]
 		last, rowPositions[i] = appendGeneratedUpdateColumn(builder, bindCtx, last, rowTag, col, rowPositions, false)
 		if rowTag != 0 {
 			rowTag = builder.qry.Nodes[last].BindingTags[0]
 		}
+		update.updatePkCol = update.updatePkCol || changesPK
 		update.updateColPosMap[col.Name] = rowPositions[i]
 		update.updateColLength++
 	}
-	return last, nil
+	return last, rowTag, nil
+}
+
+func appendUnchangedGeneratedKeyCheck(
+	builder *QueryBuilder, bindCtx *BindContext, last int32, rowTag int32,
+	col *ColDef, colIdx int, rowPositions []int, reason string,
+) (int32, error) {
+	projection := getProjectionByLastNodeWithTag(builder, last, rowTag)
+	value := generatedUpdateExpr(builder, col, projection, rowPositions, false)
+	keys := []*Expr{DeepCopyExpr(projection[colIdx]), value}
+	ctx := builder.GetContext()
+	for i, key := range keys {
+		var err error
+		if isGeometryPlanType(&col.Typ) {
+			// Preserve the raw WKB, including GEOMETRY32.
+			keys[i], err = forceCastExpr(ctx, key, Type{Id: int32(types.T_blob)})
+		} else {
+			// Reuse the index encoding to preserve exact float and vector bits.
+			keys[i], err = BindFuncExprImplByPlanExpr(ctx, "serial_full", []*Expr{key})
+		}
+		if err != nil {
+			return -1, err
+		}
+	}
+	unchanged, err := BindFuncExprImplByPlanExpr(ctx, "<=>", keys)
+	if err != nil {
+		return -1, err
+	}
+	assert, err := bindForeignKeyUpdateAssertion(ctx, unchanged, reason)
+	if err != nil {
+		return -1, err
+	}
+	if rowTag != 0 {
+		projection = nil // column remapping builds the executable projection
+	}
+	return builder.appendDMLRowFilter(bindCtx, last, []*Expr{assert}, projection), nil
+}
+
+func unsupportedGeneratedKeyChange(update *dmlPlanCtx, col *ColDef, changesPK bool) string {
+	table := update.tableDef
+	// Recursive writes skip checks on outgoing foreign keys.
+	for _, fk := range table.Fkeys {
+		if slices.Contains(fk.Cols, col.ColId) {
+			return fmt.Sprintf("foreign key action changing generated column '%s' constrained by another foreign key", col.Name)
+		}
+	}
+	if update.preserveUpdateSourceProjection {
+		// REPLACE builds this plan before remapping. The index writer
+		// expects the caller to have already remapped the input.
+		for _, index := range table.Indexes {
+			if index.TableExist && slices.ContainsFunc(index.Parts, func(part string) bool {
+				return catalog.ResolveAlias(part) == col.Name
+			}) {
+				return "REPLACE foreign key action changing an indexed generated column"
+			}
+		}
+		if changesPK {
+			return "REPLACE foreign key action changing a generated primary key"
+		}
+	}
+	if changesPK && slices.ContainsFunc(table.Indexes, isSyncMaintainedIrregularIndex) {
+		return "update primary key on a table with a synchronous full-text/vector index"
+	}
+	return ""
+}
+
+func bindForeignKeyUpdateAssertion(ctx context.Context, condition *Expr, reason string) (*Expr, error) {
+	return BindFuncExprImplByPlanExpr(ctx, "assert", []*Expr{
+		condition, makePlan2StringConstExprWithType(reason), makePlan2StringConstExprWithType("fk_action_not_supported"),
+	})
 }
 
 // Replace the child write with an assertion over its matched rows.
@@ -517,9 +566,7 @@ func appendRejectedForeignKeyUpdate(
 	if err != nil {
 		return -1, err
 	}
-	assert, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{
-		absent, makePlan2StringConstExprWithType(reason), makePlan2StringConstExprWithType("fk_action_not_supported"),
-	})
+	assert, err := bindForeignKeyUpdateAssertion(builder.GetContext(), absent, reason)
 	if err != nil {
 		return -1, err
 	}

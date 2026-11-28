@@ -268,41 +268,9 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		builder.positionalSinkScans[lastNodeId] = struct{}{}
 	}
-	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
+	lastNodeId, err = makePreUpdateDeletePlan(builder, bindCtx, updatePlanCtx, lastNodeId, allAsyncSources)
 	if err != nil || lastNodeId < 0 {
 		return err
-	}
-	// Legacy DML is appended after column remapping. Admit final target values
-	// before the shared delete/insert sink, preserving its positional row layout.
-	var asyncColumns []string
-	if !updatePlanCtx.asyncDatalinkAdmitted {
-		asyncColumns, err = legacyAsyncDatalinkUpdateColumns(updatePlanCtx.tableDef, updatePlanCtx.updateColPosMap, allAsyncSources)
-		if err != nil {
-			return err
-		}
-	}
-	if len(asyncColumns) > 0 {
-		var projection []*Expr
-		if builder.sinkColRef != nil {
-			projection = getProjectionByLastNode(builder, lastNodeId)
-		}
-		lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, updatePlanCtx.tableDef, asyncColumns, lastNodeId, 0, func(name string) (int32, bool) {
-			if pos, ok := updatePlanCtx.updateColPosMap[name]; ok {
-				return int32(pos), true
-			}
-			for i, col := range updatePlanCtx.tableDef.Cols {
-				if col.Name == name {
-					return int32(i), true
-				}
-			}
-			return 0, false
-		}, nil)
-		if err != nil {
-			return err
-		}
-		if builder.sinkColRef != nil {
-			builder.qry.Nodes[lastNodeId].ProjectList = projection
-		}
 	}
 	if updatePlanCtx.preserveUpdateSourceProjection {
 		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
@@ -4177,11 +4145,11 @@ func appendDeleteIndexTablePlanWithoutFilters(
 // makePreUpdateDeletePlan
 // sink_scan -> project -> [agg] -> [filter] -> sink
 func makePreUpdateDeletePlan(
-	ctx CompilerContext,
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	delCtx *dmlPlanCtx,
 	lastNodeId int32,
+	allAsyncSources bool,
 ) (int32, error) {
 	// lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 	lastNode := builder.qry.Nodes[lastNodeId]
@@ -4347,12 +4315,9 @@ func makePreUpdateDeletePlan(
 	// A foreign-key action supplies assignments without going through UPDATE binding.
 	if delCtx.isFkRecursionCall && delCtx.updateColLength > 0 {
 		var err error
-		lastNodeId, err = appendForeignKeyGeneratedUpdate(builder, bindCtx, lastNodeId, rowTag, delCtx)
+		lastNodeId, rowTag, err = appendForeignKeyGeneratedUpdate(builder, bindCtx, lastNodeId, rowTag, delCtx)
 		if err != nil || lastNodeId < 0 {
 			return lastNodeId, err
-		}
-		if rowTag != 0 {
-			rowTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
 		}
 	}
 
@@ -4370,6 +4335,36 @@ func makePreUpdateDeletePlan(
 			}, delCtx.checkMode == filterUpdateCheck)
 		if err != nil {
 			return -1, err
+		}
+	}
+
+	// Bind Datalink admission to the same final row as CHECK. REPLACE
+	// still uses binding tags here, while other legacy writes use positions.
+	if delCtx.updateColLength > 0 && !delCtx.asyncDatalinkAdmitted {
+		asyncColumns, err := legacyAsyncDatalinkUpdateColumns(delCtx.tableDef, delCtx.updateColPosMap, allAsyncSources)
+		if err != nil {
+			return -1, err
+		}
+		if len(asyncColumns) > 0 {
+			var projection []*Expr
+			if builder.sinkColRef != nil {
+				projection = getProjectionByLastNode(builder, lastNodeId)
+			}
+			lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, delCtx.tableDef, asyncColumns, lastNodeId, rowTag, func(name string) (int32, bool) {
+				if pos, ok := delCtx.updateColPosMap[name]; ok {
+					return int32(pos), true
+				}
+				for i, col := range delCtx.tableDef.Cols {
+					if col.Name == name {
+						return int32(i), true
+					}
+				}
+				return 0, false
+			}, nil)
+			if err != nil {
+				return -1, err
+			}
+			builder.qry.Nodes[lastNodeId].ProjectList = projection
 		}
 	}
 

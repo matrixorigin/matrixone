@@ -294,4 +294,77 @@ id    v
 select * from fk_combined_child;
 id    a    b    g
 10    NULL    2    2
+create table fk_stable_parent(id int primary key);
+create table fk_stable_reference(id int primary key);
+create table fk_stable_child(
+id int primary key, pid int, fallback int,
+g int generated always as (ifnull(pid, fallback)) stored,
+foreign key(pid) references fk_stable_parent(id) on delete set null,
+foreign key(g) references fk_stable_reference(id)
+);
+insert into fk_stable_parent values (1), (2);
+insert into fk_stable_reference values (1), (2);
+insert into fk_stable_child(id, pid, fallback) values (10, 1, 1), (20, 2, 99);
+delete from fk_stable_parent where id in (1, 2);
+not supported: foreign key action changing generated column 'g' constrained by another foreign key
+select id from fk_stable_parent order by id;
+id
+1
+2
+select id, pid, g from fk_stable_child order by id;
+id    pid    g
+10    1    1
+20    2    2
+delete from fk_stable_parent where id = 1;
+select id from fk_stable_parent order by id;
+id
+2
+select id, pid, g from fk_stable_child order by id;
+id    pid    g
+10    NULL    1
+20    2    2
+create table fk_stable_index_parent(id int primary key, v int);
+create table fk_stable_index_child(
+id int primary key, pid int,
+g int generated always as (if(id = 30, null, ifnull(pid, 1))) stored,
+derived int generated always as (ifnull(pid, 0) + ifnull(g, 0)) stored,
+key idx_stable_generated(g),
+foreign key(pid) references fk_stable_index_parent(id) on delete set null
+);
+insert into fk_stable_index_parent values (1, 10), (2, 20), (3, 30);
+insert into fk_stable_index_child(id, pid) values (10, 1), (20, 2), (30, 3);
+replace into fk_stable_index_parent values (1, 100), (2, 200);
+not supported: REPLACE foreign key action changing an indexed generated column
+select * from fk_stable_index_parent order by id;
+id    v
+1    10
+2    20
+3    30
+select id, pid, g, derived from fk_stable_index_child order by id;
+id    pid    g    derived
+10    1    1    2
+20    2    2    4
+30    3    NULL    3
+replace into fk_stable_index_parent values (1, 100), (3, 300);
+select * from fk_stable_index_parent order by id;
+id    v
+1    100
+2    20
+3    300
+select id, pid, g, derived from fk_stable_index_child force index(idx_stable_generated)
+where g in (1, 2) order by id;
+id    pid    g    derived
+10    NULL    1    1
+20    2    2    4
+select id, pid, g, derived from fk_stable_index_child where g is null;
+id    pid    g    derived
+30    NULL    NULL    0
+alter table fk_stable_index_child drop column derived;
+insert into fk_stable_index_child(id, pid) values (11, 1);
+replace into fk_stable_index_parent values (1, 101);
+select id, pid, g from fk_stable_index_child force index(idx_stable_generated)
+where g = 1 order by id;
+id    pid    g
+10    NULL    1
+11    NULL    1
 drop database check_constraint_test;
