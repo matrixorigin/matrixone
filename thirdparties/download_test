@@ -220,7 +220,8 @@ cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "curl-free cache hit cha
 assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
 
 new_case prebuilt-hit
-MO_DOWNLOAD_PREBUILT_FILE="$fixture" MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl" \
+ln -s "$fixture" "$MO_DOWNLOAD_MOCK_STATE/prebuilt"
+MO_DOWNLOAD_PREBUILT_FILE="$MO_DOWNLOAD_MOCK_STATE/prebuilt" MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl" \
 	"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
 assert_count 0
 cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "prebuilt payload differed"
