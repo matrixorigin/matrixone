@@ -87,13 +87,13 @@ type serverConn struct {
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
 	rebalancer *rebalancer
-	// tunnelOwner linearizes terminal Close with cache-generation rebinding.
-	// The backend may outlive its originating tunnel while cached, but it must
-	// have exactly one manager/tunnel owner at every instant.
+	// tunnelOwner linearizes registration, cache-generation rebinding and
+	// terminal close. A candidate owns no manager entries until registered.
 	tunnelOwner struct {
 		sync.Mutex
-		tun    *tunnel
-		closed bool
+		tun        *tunnel
+		registered bool
+		closed     bool
 	}
 	// connResp is the response bytes which is got from cn server when
 	// connect to the cn.
@@ -111,14 +111,6 @@ type serverConn struct {
 }
 
 var _ ServerConn = (*serverConn)(nil)
-
-type contextHandshakeHandler interface {
-	HandleHandshakeContext(
-		ctx context.Context,
-		handshakeResp *frontend.Packet,
-		timeout time.Duration,
-	) (*frontend.Packet, error)
-}
 
 type contextStmtExecutor interface {
 	ExecStmtContext(
@@ -236,7 +228,7 @@ func newServerConn(
 	r *rebalancer,
 	timeout time.Duration,
 	allocators ...frontend.Allocator,
-) (ServerConn, error) {
+) (*serverConn, error) {
 	return newServerConnContext(
 		context.Background(), cn, tun, r, timeout, allocators...,
 	)
@@ -249,7 +241,7 @@ func newServerConnContext(
 	r *rebalancer,
 	timeout time.Duration,
 	allocators ...frontend.Allocator,
-) (ServerConn, error) {
+) (*serverConn, error) {
 	var logger *zap.Logger
 	var diagnosticLogger *logutil.RateLimitedLogger
 	if r != nil && r.logger != nil {
@@ -422,11 +414,20 @@ func (s *serverConn) rebindTunnel(next *tunnel) bool {
 	if old == next {
 		return true
 	}
-	if s.rebalancer != nil {
+	if s.tunnelOwner.registered {
 		s.rebalancer.connManager.rebind(s.cnServer, old, next)
 	}
 	s.tunnelOwner.tun = next
 	return true
+}
+
+// registerTunnel publishes the backend to the manager before the router
+// returns it to the caller.
+func (s *serverConn) registerTunnel() {
+	s.tunnelOwner.Lock()
+	defer s.tunnelOwner.Unlock()
+	s.rebalancer.connManager.connect(s.cnServer, s.tunnelOwner.tun)
+	s.tunnelOwner.registered = true
 }
 
 func (s *serverConn) closeTunnelOwnership() {
@@ -439,8 +440,9 @@ func (s *serverConn) closeTunnelOwnership() {
 		return
 	}
 	s.tunnelOwner.closed = true
-	if s.rebalancer != nil {
+	if s.tunnelOwner.registered {
 		s.rebalancer.connManager.disconnect(s.cnServer, s.tunnelOwner.tun)
+		s.tunnelOwner.registered = false
 	}
 	s.tunnelOwner.tun = nil
 }
