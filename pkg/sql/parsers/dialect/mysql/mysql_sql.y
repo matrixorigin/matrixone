@@ -1009,7 +1009,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
 %type <cstr> role_name
-%type <str> id_only_bare_name
+%type <str> id_only_bare_name generic_function_name
 %type <usernameRecord> user_name
 %type <user> user_spec drop_user_spec user_spec_with_identified
 %type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
@@ -10110,10 +10110,19 @@ role_spec:
         )
     }
 
-// These bitmap names were bare IDs before they needed dedicated tokens for
-// window calls. Keep other keyword tokens out of role and Iceberg ref names.
-id_only_bare_name:
+// Keep the words that were bare IDs before they became Python function
+// options usable in ordinary calls, role names and Iceberg refs.
+generic_function_name:
     ID
+|   CALLED
+|   INPUT
+|   SCALAR
+|   VECTOR
+
+// The bitmap aggregate names were also bare IDs before they needed dedicated
+// tokens for window calls. Their call syntax is handled separately.
+id_only_bare_name:
+    generic_function_name
 |   BITMAP_CONSTRUCT_AGG
 |   BITMAP_OR_AGG
 
@@ -14831,7 +14840,7 @@ std_dev_pop:
 |   STDDEV_POP
 
 function_call_generic:
-    ID '(' expression_list_opt ')'
+    generic_function_name '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14856,7 +14865,7 @@ function_call_generic:
         // `serial` is a keyword (SERIAL column-alias type, see column_def) but
         // the serial(...)/serial_extract(serial(...))/composite-index consumers
         // use it as an ordinary generic function. Keep the generic-call shape
-        // of the ID arm above so the write/spellings, nesting and arity are
+        // of the first arm above so the write/spellings, nesting and arity are
         // byte-identical to what `serial` parsed as before the keyword was
         // introduced (#31748).
         name := tree.NewUnresolvedColName($1)

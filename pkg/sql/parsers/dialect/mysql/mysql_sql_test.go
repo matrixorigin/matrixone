@@ -189,6 +189,45 @@ func TestPythonFunctionOptions(t *testing.T) {
 	require.ErrorContains(t, sqlOptions.(*tree.CreateFunction).Valid(), "require LANGUAGE PYTHON")
 }
 
+func TestPythonOptionKeywordsPreserveBareIdentifiers(t *testing.T) {
+	for _, name := range []string{"CaLLeD", "InPuT", "ScaLaR", "VecToR"} {
+		wantName := strings.ToLower(name)
+		t.Run("function/"+name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), "select "+name+"(1)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			fn := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+			require.Equal(t, wantName, fn.FuncName.Compare())
+			require.Len(t, fn.Exprs, 1)
+			require.Equal(t, "1", tree.String(fn.Exprs[0], dialect.MYSQL))
+		})
+		t.Run("create role/"+name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), "create role "+name, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			roles := stmt.(*tree.CreateRole).Roles
+			require.Len(t, roles, 1)
+			require.Equal(t, wantName, roles[0].UserName)
+		})
+		t.Run("set role/"+name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), "set role "+name, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, wantName, stmt.(*tree.SetRole).Role.UserName)
+		})
+		t.Run("iceberg ref/"+name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), "select * from t for iceberg ref "+name, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+			table := join.Left.(*tree.AliasedTableExpr).Expr.(*tree.TableName)
+			require.NotNil(t, table.IcebergRef)
+			require.Equal(t, tree.IcebergRefNamedRef, table.IcebergRef.Type)
+			require.Equal(t, tree.Identifier(name), table.IcebergRef.RefName)
+		})
+	}
+}
+
 func TestPythonFunctionImportIsRejectedBeforeExecution(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create function py (x int) returns int language python import 'udf.py' handler 'py'", 1)

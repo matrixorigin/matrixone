@@ -47,7 +47,16 @@ func TestPreparedRoutineFieldHistory(t *testing.T) {
 		exec("create database " + schema)
 		exec("use " + schema)
 
-		for _, protocol := range []string{"binary", "text"} {
+		for _, tc := range []struct {
+			protocol string
+			name     string
+		}{
+			// VECTOR is also a Python routine option. A bare SQL routine
+			// with that name must work through both query and prepare paths.
+			{protocol: "binary", name: "vector"},
+			{protocol: "text", name: "f_text"},
+		} {
+			protocol, name := tc.protocol, tc.name
 			t.Run(protocol, func(t *testing.T) {
 
 				exec := func(q string) {
@@ -55,7 +64,6 @@ func TestPreparedRoutineFieldHistory(t *testing.T) {
 					_, err := conn.ExecContext(ctx, q)
 					require.NoError(t, err, q)
 				}
-				name := "f_" + protocol
 				create := func(replace bool, ret, body string) {
 					ddl := "create function "
 					if replace {
