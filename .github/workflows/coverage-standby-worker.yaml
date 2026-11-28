@@ -22,7 +22,7 @@ jobs:
     uses: ./.github/workflows/coverage-standby-identity.yaml
   cs:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'cs'
-    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@bf5c2e5a7fa3938cec0e080aac13c61c8bf6c5f8
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@83456ade5a343aebc9dea058eba6117daf3777f3
     with:
       group: ${{ fromJSON(inputs.ticket).group }}
       source: ${{ fromJSON(inputs.ticket).source }}
@@ -37,7 +37,7 @@ jobs:
       CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   idc:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'idc'
-    uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@bf5c2e5a7fa3938cec0e080aac13c61c8bf6c5f8
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@83456ade5a343aebc9dea058eba6117daf3777f3
     with:
       group: ${{ fromJSON(inputs.ticket).group }}
       source: ${{ fromJSON(inputs.ticket).source }}
