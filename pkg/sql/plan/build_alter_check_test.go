@@ -1108,3 +1108,53 @@ func TestAlterRetainedReleasedPowerGenerated(t *testing.T) {
 		}
 	}
 }
+
+func TestAlterCopyReplaysSpatialThroughExecutableSpelling(t *testing.T) {
+	mock := newCheckAlterOptimizer(t, "create table rtree_t(id int primary key, g point not null, key idx_g using rtree(g))")
+	p, err := runOneStmt(mock, t, "alter table rtree_t algorithm=copy, add column lead int default 7 first")
+	require.NoError(t, err)
+	alter := p.GetDdl().GetAlterTable()
+	// The internal temporary CREATE (CreateTmpTableSql) must carry the
+	// parseable replay spelling, while SHOW CREATE keeps the display
+	// "SPATIAL KEY" spelling (#33356: the display form is not a parseable
+	// replay for the internal temporary table).
+	require.Contains(t, alter.CreateTmpTableSql, "USING rtree")
+	require.NotContains(t, alter.CreateTmpTableSql, "SPATIAL KEY")
+	parent, err := WithAlterTableDDLReplay(t.Context(), mock.ctxt.DefaultDatabase(), alter.TableDef, alter.CopyTableDef)
+	require.NoError(t, err)
+	mock.ctxt.SetContext(parent)
+	rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+	require.NoError(t, err, "copy DDL must replan: %s", alter.CreateTmpTableSql)
+	def := rebuilt.GetDdl().GetCreateTable().TableDef
+	require.Len(t, def.Indexes, 1)
+	require.True(t, catalog.IsRTreeIndexAlgo(def.Indexes[0].IndexAlgo))
+	require.Equal(t, "idx_g", def.Indexes[0].IndexName)
+
+	// The public SHOW CREATE display still shows SPATIAL KEY: only the
+	// internal replay spelling changed, not the display contract.
+	display, _, err := ConstructCreateTableSQL(&mock.ctxt, alter.CopyTableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, display, "SPATIAL KEY `idx_g` (`g`)")
+}
+
+func TestAlterCopyReplaysApostropheIdentifiersVerbatim(t *testing.T) {
+	mock := newCheckAlterOptimizer(t, "create table apos_t(id int primary key, w int, v vecf32(3), `pay'load` int, constraint `c'k` check (w >= 0), index idx_apos using ivfflat(v) lists=1 op_type 'vector_l2_ops' include(`pay'load`))")
+	p, err := runOneStmt(mock, t, "alter table apos_t algorithm=copy, add column marker int default 7 first")
+	require.NoError(t, err)
+	alter := p.GetDdl().GetAlterTable()
+	// CHECK constraint and INCLUDE column names must replay to the exact
+	// authored identifier; apostrophe doubling inside backticks is string
+	// literal escaping and decodes to a different name (#33357).
+	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `c'k` CHECK")
+	require.NotContains(t, alter.CreateTmpTableSql, "c''k")
+	require.Contains(t, alter.CreateTmpTableSql, "INCLUDE (`pay'load`)")
+	require.NotContains(t, alter.CreateTmpTableSql, "pay''load")
+	parent, err := WithAlterTableDDLReplay(t.Context(), mock.ctxt.DefaultDatabase(), alter.TableDef, alter.CopyTableDef)
+	require.NoError(t, err)
+	mock.ctxt.SetContext(parent)
+	rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+	require.NoError(t, err, "copy DDL must replan: %s", alter.CreateTmpTableSql)
+	def := rebuilt.GetDdl().GetCreateTable().TableDef
+	require.Len(t, def.Checks, 1)
+	require.Equal(t, "c'k", def.Checks[0].Name)
+}

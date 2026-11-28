@@ -645,14 +645,25 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 		return nil, err
 	}
 
-	createTmpDdl, _, err := constructCreateTableSQL(
+	var createTmpDdl string
+	createDisplaySql, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
 		false, "", // Internal SQL is parsed in ordinary mode.
+		&createTmpDdl,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	// createTmpDdl is the executable replay spelling: the SHOW CREATE display
+	// string can carry index spellings the parser cannot replay (SPATIAL KEY),
+	// so the internal temporary CREATE must take the replay form instead.
+	// Envelope-backed external tables render a valid CREATE on the formatter's
+	// early success return without a separate replay spelling; retain that
+	// returned DDL there so the copy never consumes an empty CREATE.
+	if createTmpDdl == "" {
+		createTmpDdl = createDisplaySql
+	}
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
 	alterTablePlan.AffectedCols = affectedCols
 
