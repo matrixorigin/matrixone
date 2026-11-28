@@ -57,6 +57,10 @@ ONNX_VERSION=1.26.0
 ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
 ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 ONNX_FALLBACK_BASE_URL=https://media.githubusercontent.com/media/matrixorigin/thirdparty/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+# The MatrixOne CI builder image ships these pinned artifacts. Keep this a
+# versioned directory so a base-image update cannot accidentally satisfy a
+# different ONNX Runtime version. A local build simply falls back to DOWNLOAD.
+ONNX_PREBUILT_DIR ?= /opt/matrixone/onnxruntime/$(ONNX_VERSION)
 ONNX_SUPPORTED=
 ifeq ($(UNAME_S)_$(UNAME_M),darwin_arm64)
   ONNX_SUPPORTED=1
@@ -200,7 +204,8 @@ install/lib/libroaring.a:
 #   macOS arm64  -> onnxruntime_arm64.dylib
 ifeq ($(ONNX_SUPPORTED),1)
 onnxruntime: | init
-	MO_DOWNLOAD_FALLBACK_URL="$(ONNX_FALLBACK_BASE_URL)/$(ONNX_SRC)" \
+	MO_DOWNLOAD_PREBUILT_FILE="$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" \
+		MO_DOWNLOAD_FALLBACK_URL="$(ONNX_FALLBACK_BASE_URL)/$(ONNX_SRC)" \
 		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"
 else
 onnxruntime:

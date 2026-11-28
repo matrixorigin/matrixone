@@ -127,7 +127,7 @@ else
 	expected_sha256=$(shasum -a 256 "$fixture" | awk '{print $1}')
 fi
 
-unset MO_DOWNLOAD_FALLBACK_URL MO_DOWNLOAD_MOCK_PRIMARY_STATUS
+unset MO_DOWNLOAD_FALLBACK_URL MO_DOWNLOAD_MOCK_PRIMARY_STATUS MO_DOWNLOAD_PREBUILT_FILE
 export MO_DOWNLOAD_ATTEMPTS=3
 export MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS=1
 export MO_DOWNLOAD_MAX_TIME_SECONDS=1
@@ -218,6 +218,27 @@ export MO_DOWNLOAD_CURL_BIN
 assert_count 0
 cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "curl-free cache hit changed destination"
 assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+
+new_case prebuilt-hit
+ln -s "$fixture" "$MO_DOWNLOAD_MOCK_STATE/prebuilt"
+MO_DOWNLOAD_PREBUILT_FILE="$MO_DOWNLOAD_MOCK_STATE/prebuilt" MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl" \
+	"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 0
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "prebuilt payload differed"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case prebuilt-invalid
+printf 'corrupt preloaded dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/prebuilt"
+printf 'old destination\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+cp "$MO_DOWNLOAD_MOCK_STATE/result" "$MO_DOWNLOAD_MOCK_STATE/original"
+if MO_DOWNLOAD_PREBUILT_FILE="$MO_DOWNLOAD_MOCK_STATE/prebuilt" MO_DOWNLOAD_CURL_BIN="$0" \
+	"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "corrupt prebuilt payload was accepted"
+fi
+assert_count 0
+cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "invalid preload changed destination"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
 
 new_case cache-miss-without-curl
 MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl"
