@@ -159,8 +159,11 @@ deploying the combined GPU build. Package provenance is recorded in
 
 ## Configure and query
 
-Add this section to the CN configuration selected by your launch manifest
-(`etc/launch/cn.toml` for the default local launch). `native-config-path` names the
+For the default local launch, open `etc/launch/cn.toml` and set `enabled = true`
+in the existing `[cn.sirius]` section. If your launch manifest selects a different
+CN file, edit its existing section or add the example below if the section is missing.
+
+`native-config-path` names the
 Sirius YAML configuration. Its GPU and pinned-host budgets must leave enough
 room for every admitted input window and the result window.
 
