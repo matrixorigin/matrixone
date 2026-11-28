@@ -5,7 +5,7 @@ on:
     types: [closed]
   workflow_run:
     workflows: ['MatrixOne ALL CI']
-    types: [requested, completed]
+    types: [requested]
   workflow_dispatch:
     inputs:
       successor_run_id:
@@ -40,11 +40,9 @@ jobs:
           SUCCESSOR_RUN_ID: ${{ github.event.workflow_run.id || inputs.successor_run_id }}
         with:
           script: |
-            const { releaseSupersededRuns, releaseClosedPullRequestRuns, releaseCompletedCoverageWorkers } = require('./.github/ci/cancel-superseded.cjs');
+            const { releaseSupersededRuns, releaseClosedPullRequestRuns } = require('./.github/ci/cancel-superseded.cjs');
             if (context.eventName === 'pull_request_target') {
               await releaseClosedPullRequestRuns({ github, context, core });
-            } else if (context.eventName === 'workflow_run' && context.payload.action === 'completed') {
-              await releaseCompletedCoverageWorkers({ github, context, core });
             } else {
               await releaseSupersededRuns({ github, context, core, runId: process.env.SUCCESSOR_RUN_ID });
             }

@@ -143,22 +143,14 @@ function workflowJobs(filename) {
 
 const entrypointJobs = () => workflowJobs('entrypoint.yaml');
 
-test('coverage standby opts in only for the 4.2-dev base and pins the worker protocol', () => {
-  const dispatcher = entrypointJobs()['matrixone-ut-coverage'];
-  assert.match(dispatcher, /^      enable_4_2_dev: \$\{\{ github\.base_ref == '4\.2-dev' \}\}$/m);
-  const worker = workflowJobs('coverage-standby-worker.yaml');
-  const calls = [
-    [dispatcher, 'coverage-ut-standby'],
-    [worker.cs, 'coverage-worker-cs'],
-    [worker.idc, 'coverage-worker-idc'],
-  ];
-  const pins = calls.map(([job, expected]) => {
-    const call = job.match(/^    uses: matrixorigin\/CI\/\.github\/workflows\/([\w-]+)\.yaml@([0-9a-f]{40})$/m);
-    assert.ok(call, `expected an immutable ${expected} workflow reference`);
-    assert.equal(call[1], expected);
-    return call[2];
-  });
-  assert.equal(new Set(pins).size, 1, 'update the dispatcher and both worker pins together');
+test('Coverage stays in this run with a pinned native workflow and the release opt-in', () => {
+  const job = entrypointJobs()['matrixone-ut-coverage'];
+  assert.match(job, /^    uses: matrixorigin\/CI\/\.github\/workflows\/coverage-ut\.yaml@[0-9a-f]{40}$/m);
+  assert.match(job, /^      enable_4_2_dev: \$\{\{ github\.base_ref == '4\.2-dev' \}\}$/m);
+  assert.match(job, /^      runner_pool: \$\{\{ vars\.MO_COVERAGE_RUNNER_POOL \|\| 'cs' \}\}$/m);
+  assert.match(job, /^      bvt_generation: \$\{\{ needs\.preflight\.outputs\.generation \}\}$/m);
+  assert.match(job, /^      contents: read\n      pull-requests: read$/m);
+  assert.doesNotMatch(job, /actions: write|enable_cs_site_retry/);
 });
 
 test('actual preflight applies main-only SDK policy to routing and the required check', async () => {
