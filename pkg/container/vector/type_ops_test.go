@@ -57,6 +57,7 @@ func TestTypeOpsRows(t *testing.T) {
 		require.NotNil(t, ops.getAny, name)
 		require.NotNil(t, ops.appendAny, name)
 		require.NotNil(t, ops.setAny, name)
+		require.NotNil(t, ops.appendRaw, name)
 		require.NotNil(t, ops.shrink, name)
 		require.NotNil(t, ops.shrinkByMask, name)
 		require.NotNil(t, ops.shuffle, name)
@@ -389,6 +390,37 @@ func TestSetAny(t *testing.T) {
 		require.Equal(t, wasNull, v.IsNull(2), "%s: SetAny leaves the NULL bit", oid.OidString())
 		require.Panics(t, func() { _ = SetAny(v, 2, struct{}{}, mp) }, oid.OidString())
 		v.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+// TestAppendRaw appends every row's raw bytes, and NULLs, for every supported
+// type, and checks unsupported types are refused.
+func TestAppendRaw(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(8))
+	for i := 0; i < 256; i++ {
+		oid := types.T(i)
+		if !SupportsAny(oid) {
+			typ, ok := oid.TryToType()
+			if !ok {
+				typ = types.Type{Oid: oid}
+			}
+			require.Error(t, AppendRaw(NewVec(typ, mp), nil, false, mp), oid.OidString())
+			continue
+		}
+		src := randomVector(t, rng, oid.ToType(), 9, mp)
+		dst := NewVec(oid.ToType(), mp)
+		for row := 0; row < src.Length(); row++ {
+			require.NoError(t, AppendRaw(dst, src.GetRawBytesAt(row), src.IsNull(uint64(row)), mp), oid.OidString())
+		}
+		requireSameVector(t, src, dst, oid.OidString()+": AppendRaw")
+		// a NULL with no payload
+		require.NoError(t, AppendRaw(dst, nil, true, mp), oid.OidString())
+		require.Equal(t, src.Length()+1, dst.Length(), oid.OidString())
+		require.True(t, dst.IsNull(uint64(src.Length())), oid.OidString())
+		src.Free(mp)
+		dst.Free(mp)
 	}
 	require.Zero(t, mp.CurrNB())
 }

@@ -163,8 +163,6 @@ pkg/sql/colexec/aggexec/vardev2.go	makeVarStdDevExec	float	1	T_bf16,T_float16,T_
 pkg/sql/colexec/aggexec/vardev2.go	makeVarStdDevExec	temporal	1	T_date,T_datetime,T_time,T_timestamp
 pkg/sql/colexec/aggexec/vector_matmul.go	VectorMatmulVecSupported	vector	1	T_array_float64
 pkg/sql/colexec/aggexec/vector_matmul.go	parseVectorMatmulConfig	vector	1	T_array_float64
-pkg/sql/colexec/aggexec/window.go	appendValueToVector	decimal	1	T_decimal256
-pkg/sql/colexec/aggexec/window.go	appendValueToVector	temporal	1	T_year
 pkg/sql/colexec/dedup_key.go	FormatDedupKey	float chain	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/colexec/evalExpression.go	finiteVectorEndpoints	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/colexec/evalExpression.go	finiteZoneMapEndpoints	float	1	T_bf16,T_float16,T_float4,T_float8
