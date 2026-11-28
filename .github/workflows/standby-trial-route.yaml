@@ -20,7 +20,7 @@ jobs:
       github.repository == 'matrixorigin/matrixone' && github.event_name == 'push' &&
       github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' &&
       github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
-      github.event.before == '1f03a5c6106528471fc518939785737ddb79d906'
+      github.event.before == 'b0f4ab7d198ba88bbcf5095afa17687d396f2f33'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: ci
@@ -33,7 +33,7 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 8d871adae78343a37d63bd5786e33c81ec1e83d9
+        ref: 9166306c4e767110eecf4d75a48c121a42fde4d5
         path: .standby
         sparse-checkout: |
           scripts/coverage_standby.py

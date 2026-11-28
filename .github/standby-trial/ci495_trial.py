@@ -10,8 +10,8 @@ REF = "weilu-runner-test"
 ENTRY = ".github/workflows/coverage-standby-pr32922.yaml"
 WORKER = ".github/workflows/coverage-standby-worker.yaml"
 SOURCE = "Ariznawlll/matrixone"
-HEAD = "02db9ac905295aedf2ea3ae0edf46e01778177ea"
-PIN = "8d871adae78343a37d63bd5786e33c81ec1e83d9"
+HEAD = "365f74726bf9282c510a743b26d6b72e3cb541d7"
+PIN = "9166306c4e767110eecf4d75a48c121a42fde4d5"
 
 
 def main():

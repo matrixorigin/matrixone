@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '1f03a5c6106528471fc518939785737ddb79d906' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'b0f4ab7d198ba88bbcf5095afa17687d396f2f33' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -52,8 +52,8 @@ jobs:
           from coverage_pr_entry import ENTRY, PROJECT, has_s3_fixture, route
           import node_cache_real_pr_gate as approved
 
-          number, run_id, preflight = 32922, 46008768129, 140538571212
-          head, source, author = "02db9ac905295aedf2ea3ae0edf46e01778177ea", "Ariznawlll/matrixone", "Ariznawlll"
+          number, run_id, preflight = 32922, 46057870893, 140704664963
+          head, source, author = "365f74726bf9282c510a743b26d6b72e3cb541d7", "Ariznawlll/matrixone", "Ariznawlll"
           def check(ok, message):
               if not ok:
                   raise SystemExit(message)
@@ -144,7 +144,7 @@ jobs:
       source: ${{ needs.authorize.outputs.source }}
       enable_cs_site_retry: false
       first_pool_snapshot: >-
-        {"captured_at":1795792021,"pools":[{"pool":"cs-mnl2-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n2-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n2-pr-v1","slots":2,"pending":0}]}
+        {"captured_at":1795843887,"pools":[{"pool":"cs-mnl2-nc-n0-pr-v1","slots":1,"pending":0},{"pool":"cs-mnl2-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n2-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n2-pr-v1","slots":2,"pending":0}]}
   merge:
     needs: [authorize, coverage]
     runs-on: ubuntu-latest
