@@ -320,7 +320,7 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 			containers.ReleaseVector(col)
 			return err
 		}
-		if err = containers.ExtendVec(vec, col); err != nil {
+		if err = vec.UnionBatch(col, 0, col.Length(), nil, vec.MPool()); err != nil {
 			containers.ReleaseVector(col)
 			return err
 		}
@@ -545,23 +545,25 @@ func (space *tableSpace) BatchDedup(key containers.Vector) error {
 
 func (space *tableSpace) Scan(
 	ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool,
-) {
-	n := space.node
-	n.Scan(ctx, bat, colIdxes, mp)
+) error {
+	return space.node.Scan(ctx, bat, colIdxes, mp)
 }
 
 func (space *tableSpace) HybridScan(
 	ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool,
-) {
-	space.node.Scan(ctx, bat, colIdxes, mp)
+) error {
+	if err := space.node.Scan(ctx, bat, colIdxes, mp); err != nil {
+		return err
+	}
 	if space.node.data.Deletes.IsEmpty() {
-		return
+		return nil
 	}
 	if (*bat).Deletes == nil {
 		(*bat).Deletes = &nulls.Nulls{}
 		(*bat).Deletes.Init(mp)
 	}
 	(*bat).Deletes.Or(space.node.data.Deletes)
+	return nil
 }
 
 func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry) error {

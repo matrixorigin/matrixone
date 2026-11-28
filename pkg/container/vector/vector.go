@@ -386,6 +386,18 @@ func (v *Vector) HasNull() bool {
 	return v.IsConstNull() || !v.nsp.IsEmpty()
 }
 
+// NullCount counts the NULL rows; a const NULL vector is all NULL and any
+// other const vector has none.
+func (v *Vector) NullCount() int {
+	if v.IsConstNull() {
+		return v.length
+	}
+	if v.IsConst() {
+		return 0
+	}
+	return v.nsp.Count()
+}
+
 func (v *Vector) AllNull() bool {
 	if v.IsConstNull() {
 		return true
@@ -564,6 +576,21 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 		return ops.getAny(vec, i, deepCopy)
 	}
 	return nil
+}
+
+// GetValue returns row i as a value, honoring NULL: nil for a const NULL
+// vector, a nil []byte for a NULL varlena row, and a copy of a varlena value.
+// A NULL fixed-size row returns whatever its slot holds.
+//
+// Like GetAny it boxes the value; it is for code that does not know the type.
+func (v *Vector) GetValue(i int) any {
+	if v.IsConstNull() {
+		return nil
+	}
+	if v.typ.IsVarlen() && v.IsNull(uint64(i)) {
+		return []byte(nil)
+	}
+	return GetAny(v, i, true)
 }
 
 // NewVec returns an empty flat vector of typ whose memory comes from mp. A
@@ -4332,6 +4359,40 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return ops.appendAny(vec, val, mp)
 	}
 	return nil
+}
+
+// Equal reports whether v and o have the same type and length, NULL in the
+// same rows, and equal values in the others.
+func (v *Vector) Equal(o *Vector) bool {
+	if v.Length() != o.Length() || v.typ != o.typ {
+		return false
+	}
+	for i := 0; i < v.Length(); i++ {
+		isNull := v.IsNull(uint64(i))
+		if isNull != o.IsNull(uint64(i)) {
+			return false
+		}
+		if isNull {
+			continue
+		}
+		if v.typ.IsVarlen() {
+			if !bytes.Equal(v.GetBytesAt(i), o.GetBytesAt(i)) {
+				return false
+			}
+		} else if GetAny(v, i, false) != GetAny(o, i, false) {
+			return false
+		}
+	}
+	return true
+}
+
+// MustAppendValue appends val, or a NULL, through the vector's own pool and
+// panics on an error. It is for tests and for callers whose vector cannot
+// fail to grow; other code calls AppendAny and handles the error.
+func (v *Vector) MustAppendValue(val any, isNull bool) {
+	if err := AppendAny(v, val, isNull, v.mp); err != nil {
+		panic(err)
+	}
 }
 
 // withClonedSource charges a temporary snapshot to the mutation's destination.

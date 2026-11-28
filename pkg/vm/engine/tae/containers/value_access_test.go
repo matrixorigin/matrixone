@@ -130,7 +130,7 @@ func TestValueAccessMatchesLegacy(t *testing.T) {
 			b, err := src.Dup(mp)
 			require.NoError(t, err)
 			for row := 0; row < n; row++ {
-				val := GetValue(src, (row+3)%n)
+				val := src.GetValue((row + 3) % n)
 				if val == nil || src.IsNull(uint64((row+3)%n)) {
 					continue
 				}
@@ -150,7 +150,7 @@ func TestValueAccessMatchesLegacy(t *testing.T) {
 					if src.IsNull(uint64(from)) || (isNull && row%4 == 0) {
 						continue
 					}
-					require.Equal(t, GetValue(src, from), GetValue(b, row), "%s: updated row %d", name, row)
+					require.Equal(t, src.GetValue(from), b.GetValue(row), "%s: updated row %d", name, row)
 				}
 			} else {
 				requireSameRows(t, a, b, name+": update")

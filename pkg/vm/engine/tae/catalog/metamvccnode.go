@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type MetadataMVCCNode struct {
@@ -182,10 +181,6 @@ func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, 
 
 func (e *ObjectMVCCNode) IsEmpty() bool {
 	return e.Size() == 0
-}
-
-func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
-	containers.AppendValue(batch.GetVectorByName(ObjectAttr_ObjectStats), e.ObjectStats[:], false)
 }
 
 func ReadObjectInfoTuple(objs *vector.Vector, row int) (e *ObjectMVCCNode) {

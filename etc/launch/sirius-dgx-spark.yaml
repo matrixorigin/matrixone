@@ -1,0 +1,15 @@
+# NVIDIA DGX Spark (GB10), 128 GB unified memory: 48 GiB GPU and 32 GiB host budgets.
+# Both budgets draw from the same physical pool; leave room for MO and the OS.
+# Other GPUs need a profile sized for their device and host memory.
+sirius:
+  topology:
+    num_gpus: 1
+  telemetry:
+    enable_quent: false
+  space:
+    gpu:
+      - device_id: 0
+        memory_capacity: 51539607552
+    host:
+      - numa_id: 0
+        memory_capacity: 34359738368

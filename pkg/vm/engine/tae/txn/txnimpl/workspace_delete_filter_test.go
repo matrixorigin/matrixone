@@ -43,13 +43,13 @@ func workspaceDeleteFilterFixture(t testing.TB, probes, deletes int) (*txnTable,
 	deleted := containers.MakeVector(objectio.RowidType, common.WorkspaceAllocator)
 	workspace.AddVector(objectio.TombstoneAttr_Rowid_Attr, deleted)
 	for i := range probes {
-		containers.AppendValue(keys, types.NewRowIDWithObjectIDBlkNumAndRowID(types.Objectid{}, 0, uint32(i)), false)
+		keys.MustAppendValue(types.NewRowIDWithObjectIDBlkNumAndRowID(types.Objectid{}, 0, uint32(i)), false)
 	}
 	// Unsorted IDs with duplicates: workspace order is not a sort contract.
 	for i := deletes - 1; i >= 0; i-- {
 		var object types.Objectid
 		object[0] = byte((i / 4) % 2)
-		containers.AppendValue(deleted, types.NewRowIDWithObjectIDBlkNumAndRowID(object, uint16((i/2)%2), uint32(2*(i/2))), false)
+		deleted.MustAppendValue(types.NewRowIDWithObjectIDBlkNumAndRowID(object, uint16((i/2)%2), uint32(2*(i/2))), false)
 	}
 	table := &txnTable{tombstoneTable: &baseTable{tableSpace: &tableSpace{node: &anode{data: workspace}}}}
 	return table, keys, deleted
@@ -59,10 +59,10 @@ func TestWorkspaceDeleteFilter(t *testing.T) {
 	t.Run("all-null", func(t *testing.T) {
 		table, keys, _ := workspaceDeleteFilterFixture(t, 65, 65)
 		for i := range keys.Length() {
-			containers.UpdateRow(keys, i, nil, true)
+			containers.UpdateValue(keys, uint32(i), nil, true, keys.MPool())
 		}
 		require.NoError(t, table.contains(t.Context(), keys, index.ZM{}))
-		require.Equal(t, keys.Length(), containers.NullCount(keys))
+		require.Equal(t, keys.Length(), keys.NullCount())
 	})
 	for _, probes := range []int{0, 1, 2, 32, 33, 34, 65} {
 		for _, deletes := range []int{0, 1, 2, 32, 33, 34, 65} {
@@ -71,7 +71,7 @@ func TestWorkspaceDeleteFilter(t *testing.T) {
 				original := append([]types.Rowid(nil), vector.MustFixedColWithTypeCheck[types.Rowid](keys)...)
 				deleted := append([]types.Rowid(nil), vector.MustFixedColWithTypeCheck[types.Rowid](workspace)...)
 				if probes > 3 {
-					containers.UpdateRow(keys, 3, nil, true)
+					containers.UpdateValue(keys, uint32(3), nil, true, keys.MPool())
 				}
 				for range 2 { // A repeated filtering pass must be idempotent.
 					require.NoError(t, table.contains(t.Context(), keys, index.ZM{}))
@@ -82,14 +82,14 @@ func TestWorkspaceDeleteFilter(t *testing.T) {
 						}
 						require.Equal(t, wantNull, keys.IsNull(uint64(i)), "candidate %d", i)
 						if !wantNull {
-							require.Equal(t, rowid, containers.GetValue(keys, i))
+							require.Equal(t, rowid, keys.GetValue(i))
 						}
 					}
 					require.Equal(t, deleted, vector.MustFixedColWithTypeCheck[types.Rowid](workspace))
 				}
 				if probes > 1 {
 					// No index may survive a call: a later workspace append is visible.
-					containers.AppendValue(workspace, original[1], false)
+					workspace.MustAppendValue(original[1], false)
 					require.NoError(t, table.contains(t.Context(), keys, index.ZM{}))
 					require.True(t, keys.IsNull(1))
 				}
@@ -111,13 +111,13 @@ func TestFindDeletesPropagatesWorkspaceTombstoneErrors(t *testing.T) {
 	defer containers.ReleaseVector(keys)
 	objectID := objectio.NewObjectid()
 	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
-	containers.AppendValue(keys, rowID, false)
+	keys.MustAppendValue(rowID, false)
 
 	pkType := types.T_int32.ToType()
 	tombstones := catalog.NewCNTombstoneBatchByPKType(pkType, common.WorkspaceAllocator)
 	defer tombstones.Close()
-	containers.AppendValue(tombstones.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), rowID, false)
-	containers.AppendValue(tombstones.GetVectorByName(objectio.TombstoneAttr_PK_Attr), int32(1), false)
+	tombstones.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).MustAppendValue(rowID, false)
+	tombstones.GetVectorByName(objectio.TombstoneAttr_PK_Attr).MustAppendValue(int32(1), false)
 	sink := ioutil.NewTombstoneSinker(objectio.HiddenColumnSelection_None, pkType,
 		common.WorkspaceAllocator, fs, ioutil.WithMemorySizeThreshold(1))
 	defer func() { require.NoError(t, sink.Close()) }()

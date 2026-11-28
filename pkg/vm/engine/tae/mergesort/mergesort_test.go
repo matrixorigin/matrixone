@@ -42,11 +42,11 @@ func TestSort1(t *testing.T) {
 		vec := containers.MockVector(vecType, 10, false, nil)
 		vec2 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 10; i++ {
-			containers.AppendValue(vec2, containers.GetValue(vec, i), vec.IsNull(uint64(i)))
+			vec2.MustAppendValue(vec.GetValue(i), vec.IsNull(uint64(i)))
 		}
 		vecs := []containers.Vector{vec, vec2}
 		_, _ = SortBlockColumns(vecs, 0, pool)
-		require.True(t, containers.VectorEquals(vecs[0], vecs[1]), vecType)
+		require.True(t, vecs[0].Equal(vecs[1]), vecType)
 		containers.ReleaseVector(vec)
 		containers.ReleaseVector(vec2)
 	}
@@ -54,15 +54,15 @@ func TestSort1(t *testing.T) {
 	// sort null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10, false, nil)
-		containers.UpdateRow(vec, rand.Intn(10), nil, true)
-		containers.UpdateRow(vec, rand.Intn(10), nil, true)
+		containers.UpdateValue(vec, uint32(rand.Intn(10)), nil, true, vec.MPool())
+		containers.UpdateValue(vec, uint32(rand.Intn(10)), nil, true, vec.MPool())
 		vec2 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 10; i++ {
-			containers.AppendValue(vec2, containers.GetValue(vec, i), vec.IsNull(uint64(i)))
+			vec2.MustAppendValue(vec.GetValue(i), vec.IsNull(uint64(i)))
 		}
 		vecs := []containers.Vector{vec, vec2}
 		_, _ = SortBlockColumns(vecs, 0, mocks.GetTestVectorPool())
-		require.True(t, containers.VectorEquals(vecs[0], vecs[1]), vecType)
+		require.True(t, vecs[0].Equal(vecs[1]), vecType)
 		containers.ReleaseVector(vec)
 		containers.ReleaseVector(vec2)
 	}
@@ -81,9 +81,9 @@ func TestSort2(t *testing.T) {
 
 func TestSortBlockColumns(t *testing.T) {
 	vec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	containers.AppendValue(vec, []byte("b"), false)
-	containers.AppendValue(vec, []byte("c"), false)
-	containers.AppendValue(vec, []byte("a"), false)
+	vec.MustAppendValue([]byte("b"), false)
+	vec.MustAppendValue([]byte("c"), false)
+	vec.MustAppendValue([]byte("a"), false)
 	vecSlice := []containers.Vector{vec}
 
 	columns, err := SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
@@ -92,9 +92,9 @@ func TestSortBlockColumns(t *testing.T) {
 	require.Equal(t, []string{"a", "b", "c"}, vector.InefficientMustStrCol(vec))
 
 	vecWithNull := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	containers.AppendValue(vecWithNull, int32(1), false)
-	containers.AppendValue(vecWithNull, int32(2), true)
-	containers.AppendValue(vecWithNull, int32(3), false)
+	vecWithNull.MustAppendValue(int32(1), false)
+	vecWithNull.MustAppendValue(int32(2), true)
+	vecWithNull.MustAppendValue(int32(3), false)
 
 	vecSlice = []containers.Vector{vecWithNull}
 	columns, err = SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
@@ -115,7 +115,7 @@ func TestJSONClusterKeyPreservesPhysicalOrderThroughWriteAndMerge(t *testing.T) 
 
 	input := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
 	for _, value := range []string{"0", "1", "false", "true"} {
-		containers.AppendValue(input, rawJSON(value), false)
+		input.MustAppendValue(rawJSON(value), false)
 	}
 	columns, err := SortBlockColumns([]containers.Vector{input}, 0, pool)
 	require.NoError(t, err)
@@ -127,14 +127,14 @@ func TestJSONClusterKeyPreservesPhysicalOrderThroughWriteAndMerge(t *testing.T) 
 
 	oldObject := containers.NewBatch()
 	oldVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
-	containers.AppendValue(oldVector, rawJSON("true"), false)
-	containers.AppendValue(oldVector, rawJSON("0"), false)
+	oldVector.MustAppendValue(rawJSON("true"), false)
+	oldVector.MustAppendValue(rawJSON("0"), false)
 	oldObject.AddVector("j", oldVector)
 
 	newObject := containers.NewBatch()
 	newVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
-	containers.AppendValue(newVector, rawJSON("false"), false)
-	containers.AppendValue(newVector, rawJSON("1"), false)
+	newVector.MustAppendValue(rawJSON("false"), false)
+	newVector.MustAppendValue(rawJSON("1"), false)
 	newObject.AddVector("j", newVector)
 	defer oldObject.Close()
 	defer newObject.Close()
@@ -170,8 +170,8 @@ func TestJSONClusterKeyPreservesDivergentLegacyArrayOrderThroughWriteAndMerge(t 
 	)
 
 	newInput := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
-	containers.AppendValue(newInput, hundred, false)
-	containers.AppendValue(newInput, zeroZero, false)
+	newInput.MustAppendValue(hundred, false)
+	newInput.MustAppendValue(zeroZero, false)
 	columns, err := SortBlockColumns([]containers.Vector{newInput}, 0, pool)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 0}, columns)
@@ -180,7 +180,7 @@ func TestJSONClusterKeyPreservesDivergentLegacyArrayOrderThroughWriteAndMerge(t 
 
 	oldObject := containers.NewBatch()
 	oldVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
-	containers.AppendValue(oldVector, zeroZero, false)
+	oldVector.MustAppendValue(zeroZero, false)
 	oldObject.AddVector("j", oldVector)
 
 	newObject := containers.NewBatch()
@@ -220,12 +220,12 @@ func TestJSONClusterKeyRejectsLegacyRawMergedRunReinterpretation(t *testing.T) {
 
 	legacyRun := containers.NewBatch()
 	legacyVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
-	containers.AppendValue(legacyVector, hundred, false)
-	containers.AppendValue(legacyVector, zeroZero, false)
+	legacyVector.MustAppendValue(hundred, false)
+	legacyVector.MustAppendValue(zeroZero, false)
 	legacyRun.AddVector("j", legacyVector)
 	newRun := containers.NewBatch()
 	newVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
-	containers.AppendValue(newVector, threeZeros, false)
+	newVector.MustAppendValue(threeZeros, false)
 	newRun.AddVector("j", newVector)
 	defer legacyRun.Close()
 	defer newRun.Close()
@@ -268,9 +268,9 @@ func TestAObjMerge(t *testing.T) {
 	for i := 0; i < batCnt; i++ {
 		batches[i] = containers.NewBatch()
 		for j := 0; j < vecCnt; j++ {
-			vec := containers.NewVector(vecType.ToType())
+			vec := containers.MakeVector(vecType.ToType(), nil)
 			for k := 0; k < rowCnt; k++ {
-				containers.AppendValue(vec, int32(i*rowCnt+k), false)
+				vec.MustAppendValue(int32(i*rowCnt+k), false)
 			}
 			batches[i].AddVector(strconv.Itoa(j), vec)
 		}
@@ -299,12 +299,12 @@ func TestAObjMergeContainsNull(t *testing.T) {
 	for i := 0; i < batCnt; i++ {
 		batches[i] = containers.NewBatch()
 		for j := 0; j < vecCnt; j++ {
-			vec := containers.NewVector(vecType.ToType())
+			vec := containers.MakeVector(vecType.ToType(), nil)
 			for k := 0; k < rowCnt; k++ {
 				if k < 10 {
-					containers.AppendValue(vec, 0, true)
+					vec.MustAppendValue(0, true)
 				} else {
-					containers.AppendValue(vec, int32(i*rowCnt+k), false)
+					vec.MustAppendValue(int32(i*rowCnt+k), false)
 				}
 			}
 			batches[i].AddVector(strconv.Itoa(j), vec)
@@ -383,11 +383,11 @@ func newDecimal256AObjBatch(t *testing.T, decimalTyp types.Type, values []string
 	t.Helper()
 
 	bat := containers.NewBatch()
-	vec := containers.NewVector(decimalTyp)
+	vec := containers.MakeVector(decimalTyp, nil)
 	for _, value := range values {
 		decimalValue, err := types.ParseDecimal256(value, decimalTyp.Width, decimalTyp.Scale)
 		require.NoError(t, err)
-		containers.AppendValue(vec, decimalValue, false)
+		vec.MustAppendValue(decimalValue, false)
 	}
 	bat.AddVector("", vec)
 	return bat
@@ -409,9 +409,9 @@ func TestReshapeBatches1(t *testing.T) {
 	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 4, false, nil)
-		containers.UpdateRow(vec, rand.Intn(4), nil, true)
+		containers.UpdateValue(vec, uint32(rand.Intn(4)), nil, true, vec.MPool())
 		vec2 := containers.MockVector(vecType, 6, false, nil)
-		containers.UpdateRow(vec2, rand.Intn(6), nil, true)
+		containers.UpdateValue(vec2, uint32(rand.Intn(6)), nil, true, vec2.MPool())
 		t.Log(vec)
 		t.Log(vec2)
 		vecs := []containers.Vector{vec, vec2}
@@ -465,17 +465,17 @@ func TestAObjMergeLowPrecisionSortKey(t *testing.T) {
 		batches := make([]*containers.Batch, len(runs))
 		var want []float32
 		for i, run := range runs {
-			vec := containers.NewVector(oid.ToType())
+			vec := containers.MakeVector(oid.ToType(), nil)
 			for _, x := range run {
 				switch oid {
 				case types.T_bf16:
-					containers.AppendValue(vec, types.BF16FromFloat32(x), false)
+					vec.MustAppendValue(types.BF16FromFloat32(x), false)
 				case types.T_float16:
-					containers.AppendValue(vec, types.Float16FromFloat32(x), false)
+					vec.MustAppendValue(types.Float16FromFloat32(x), false)
 				case types.T_float8:
-					containers.AppendValue(vec, types.Float8FromFloat32(x), false)
+					vec.MustAppendValue(types.Float8FromFloat32(x), false)
 				case types.T_float4:
-					containers.AppendValue(vec, types.Float4FromFloat32(x), false)
+					vec.MustAppendValue(types.Float4FromFloat32(x), false)
 				}
 				want = append(want, x)
 			}

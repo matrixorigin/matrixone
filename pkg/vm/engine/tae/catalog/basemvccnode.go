@@ -107,53 +107,35 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	return nil
 }
 
-func (un EntryMVCCNode) AppendObjectTuple(bat *containers.Batch, create bool) {
-	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
-	vector.AppendFixed(
-		startTSVec,
-		un.CreatedAt,
-		false,
-		startTSVec.MPool(),
-	)
-	if create {
-		vector.AppendFixed(
-			bat.GetVectorByName(EntryNode_DeleteAt),
-			types.TS{},
-			false,
-			startTSVec.MPool(),
-		)
-		return
+func (un EntryMVCCNode) AppendObjectTuple(bat *containers.Batch, create bool) error {
+	if err := appendTS(bat, EntryNode_CreateAt, un.CreatedAt); err != nil {
+		return err
 	}
-	vector.AppendFixed(
-		bat.GetVectorByName(EntryNode_DeleteAt),
-		un.DeletedAt,
-		false,
-		startTSVec.MPool(),
-	)
+	if create {
+		return appendTS(bat, EntryNode_DeleteAt, types.TS{})
+	}
+	return appendTS(bat, EntryNode_DeleteAt, un.DeletedAt)
 }
 
-func (un EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.TS) {
-	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
+func (un EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.TS) error {
 	createTS := un.CreatedAt
 	if createTS.Equal(&txnif.UncommitTS) {
 		createTS = ts
 	}
-	vector.AppendFixed(
-		startTSVec,
-		createTS,
-		false,
-		startTSVec.MPool(),
-	)
+	if err := appendTS(bat, EntryNode_CreateAt, createTS); err != nil {
+		return err
+	}
 	deleteTS := un.DeletedAt
 	if deleteTS.Equal(&txnif.UncommitTS) {
 		deleteTS = ts
 	}
-	vector.AppendFixed(
-		bat.GetVectorByName(EntryNode_DeleteAt),
-		deleteTS,
-		false,
-		startTSVec.MPool(),
-	)
+	return appendTS(bat, EntryNode_DeleteAt, deleteTS)
+}
+
+// appendTS appends ts to the vector named attr.
+func appendTS(bat *containers.Batch, attr string, ts types.TS) error {
+	vec := bat.GetVectorByName(attr)
+	return vector.AppendFixed(vec, ts, false, vec.MPool())
 }
 
 func ReadEntryNodeTuple(createAt, deleteAt types.TS) (un *EntryMVCCNode) {

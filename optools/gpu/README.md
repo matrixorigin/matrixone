@@ -4,7 +4,7 @@ Ordinary CPU-only MatrixOne builds do not require Pixi or CUDA. GPU builds
 (`MO_CL_CUDA=1`) use Pixi as their only toolchain and dependency provider;
 system CUDA/Conda GPU builds are no longer supported.
 
-The Linux x86_64 profile provides CUDA 13.3, cuVS 26.08, RMM, and GCC 14
+The Linux x86_64 profile provides CUDA 13.3, cuVS 26.10, RMM, and GCC 14
 without a system CUDA installation or Sirius checkout:
 
 ```sh

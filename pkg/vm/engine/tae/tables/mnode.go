@@ -169,9 +169,12 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 	var commitTSVec, abort containers.Vector
 	preserveOffsets := preservePhysicalRows(ctx)
 	if preserveOffsets {
-		selection, commitTSVec, abort = node.object.appendMVCC.CollectAppendSnapshotLocked(end, mp)
+		selection, commitTSVec, abort, err = node.object.appendMVCC.CollectAppendSnapshotLocked(end, mp)
 	} else {
-		selection, commitTSVec, abort = node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+		selection, commitTSVec, abort, err = node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	}
+	if err != nil {
+		return
 	}
 	defer selection.Release()
 	if commitTSVec == nil {
@@ -217,10 +220,14 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 			if !aborted {
 				continue
 			}
-			containers.UpdateRow(commitTSVec, row, txnif.UncommitTS, false)
+			if err = vector.SetFixedAtNoTypeCheck(commitTSVec, row, txnif.UncommitTS); err != nil {
+				containers.ReleaseVector(abort)
+				inner.Close()
+				return
+			}
 			for _, colDef := range node.writeSchema.ColDefs {
 				if colDef.IsRealPrimary() && !node.writeSchema.IsSecondaryIndexTable() {
-					containers.UpdateRow(inner.Vecs[colDef.Idx], row, nil, true)
+					inner.Vecs[colDef.Idx].SetNull(uint64(row))
 				}
 			}
 		}
@@ -285,10 +292,15 @@ func (node *memoryNode) getDataWindowLocked(
 			if !ok {
 				vec = node.object.rt.VectorPool.Transient.GetVector(&colDef.Type) // TODO
 				for i := from; i < to; i++ {
-					containers.AppendValue(vec, nil, true)
+					if err = vector.AppendAny(vec, nil, true, vec.MPool()); err != nil {
+						containers.ReleaseVector(vec)
+						return
+					}
 				}
 			} else {
-				vec = containers.CloneWindowWithPool(node.data.Vecs[idx], int(from), int(to-from), node.object.rt.VectorPool.Transient)
+				if vec, err = node.object.rt.VectorPool.Transient.CloneWindow(node.data.Vecs[idx], int(from), int(to-from)); err != nil {
+					return
+				}
 			}
 			(*bat).AddVector(colDef.Name, vec)
 		}
@@ -301,10 +313,17 @@ func (node *memoryNode) getDataWindowLocked(
 			idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
 			var vec containers.Vector
 			if !ok {
-				vec = containers.NewConstNullVector(colDef.Type, int(to-from), mp)
-				containers.Extend((*bat).GetVectorByName(colDef.Name), vec) // TODO
+				vec = vector.NewConstNull(colDef.Type, int(to-from), mp)
+				dst := (*bat).GetVectorByName(colDef.Name)
+				err = dst.UnionBatch(vec, 0, vec.Length(), nil, dst.MPool()) // TODO
+				vec.Free(mp)
 			} else {
-				containers.Extend((*bat).GetVectorByName(colDef.Name), node.data.Vecs[idx])
+				src := node.data.Vecs[idx]
+				dst := (*bat).GetVectorByName(colDef.Name)
+				err = dst.UnionBatch(src, 0, src.Length(), nil, dst.MPool())
+			}
+			if err != nil {
+				return
 			}
 		}
 	}
@@ -320,33 +339,45 @@ func (node *memoryNode) ApplyAppendLocked(
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := node.data.Vecs[def.Idx]
-		containers.Extend(destVec, bat.Vecs[srcPos])
+		src := bat.Vecs[srcPos]
+		if err = destVec.UnionBatch(src, 0, src.Length(), nil, destVec.MPool()); err != nil {
+			return
+		}
 	}
 	if logicalID := node.legacyLogicalID(bat); logicalID != nil {
-		containers.Extend(node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID), logicalID)
+		destVec := node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
+		if err = destVec.UnionBatch(logicalID, 0, logicalID.Length(), nil, destVec.MPool()); err != nil {
+			return
+		}
 	}
 	// Upgrade compat: replayed WAL batches may be encoded with an older schema
 	// and omit columns introduced later. Pad those missing columns with NULLs
 	// for the appended rows so every in-memory vector stays aligned.
-	node.ReserveRowsLocked(uint32(from + rows))
+	err = node.ReserveRowsLocked(uint32(from + rows))
 	return
 }
 
 func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32) (err error) {
 	schema := node.writeSchema
 	data := node.mustData()
-	node.ReserveRowsLocked(offset + uint32(bat.Length()))
+	if err = node.ReserveRowsLocked(offset + uint32(bat.Length())); err != nil {
+		return
+	}
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := data.Vecs[def.Idx]
 		for row := 0; row < bat.Length(); row++ {
-			containers.CopyRow(destVec, bat.Vecs[srcPos], int(offset)+row, row)
+			if err = destVec.Copy(bat.Vecs[srcPos], int64(int(offset)+row), int64(row), destVec.MPool()); err != nil {
+				return
+			}
 		}
 	}
 	if logicalID := node.legacyLogicalID(bat); logicalID != nil {
 		destVec := data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
 		for row := range bat.Length() {
-			containers.CopyRow(destVec, logicalID, int(offset)+row, row)
+			if err = destVec.Copy(logicalID, int64(int(offset)+row), int64(row), destVec.MPool()); err != nil {
+				return
+			}
 		}
 	}
 	return nil
@@ -366,20 +397,24 @@ func (node *memoryNode) legacyLogicalID(bat *containers.Batch) containers.Vector
 	return bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID)
 }
 
-func (node *memoryNode) ReserveRowsLocked(rows uint32) {
+// ReserveRowsLocked pads every vector with NULLs up to rows.
+func (node *memoryNode) ReserveRowsLocked(rows uint32) error {
 	data := node.mustData()
 	for _, vec := range data.Vecs {
 		missing := int(rows) - vec.Length()
 		if missing == 1 {
-			containers.AppendValue(vec, nil, true)
+			if err := vector.AppendAny(vec, nil, true, vec.MPool()); err != nil {
+				return err
+			}
 		} else if missing > 1 {
 			// Memory-node vectors own their mutable backing. Reuse vector's
 			// bulk growth and metadata accounting without a temporary vector.
 			if err := vector.AppendMultiFixed(vec, 0, true, missing, vec.MPool()); err != nil {
-				panic(err)
+				return err
 			}
 		}
 	}
+	return nil
 }
 
 func (node *memoryNode) GetDuplicatedRows(
@@ -471,10 +506,15 @@ func (node *memoryNode) Scan(
 		selection.MaxRow,
 		mp,
 	)
+	if err != nil {
+		return
+	}
 	for _, idx := range colIdxes {
 		if idx == objectio.SEQNUM_COMMITTS {
-			node.object.appendMVCC.FillInCommitTSVecLocked(
-				(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), selection.MaxRow, mp)
+			if err = node.object.appendMVCC.FillInCommitTSVecLocked(
+				(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), selection.MaxRow, mp); err != nil {
+				return
+			}
 		}
 	}
 	if selection.Holes != nil {
@@ -496,8 +536,11 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 ) (err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
-	selection, commitTSVec, abort :=
+	selection, commitTSVec, abort, err :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	if err != nil {
+		return err
+	}
 	defer selection.Release()
 	if commitTSVec == nil {
 		return nil
@@ -522,9 +565,9 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 			if *bat == nil {
 				*bat = catalog.NewTombstoneBatchByPKType(*pkVec.GetType(), mp)
 			}
-			containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), rowIDs[i], false)
-			containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr), containers.GetValue(pkVec, int(i)), false)
-			containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), commitTSs[selectedOffset], false)
+			if err = appendTombstoneRow(*bat, rowIDs[i], pkVec, int(i), commitTSs[selectedOffset]); err != nil {
+				return
+			}
 		}
 		selectedOffset++
 	}

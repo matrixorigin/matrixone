@@ -31,19 +31,19 @@ func TestVectorPoolClosePreservesBorrowers(t *testing.T) {
 	other := NewVectorPool(t.Name()+"-other", 2, WithMPool(mp))
 	fixedType, bytesType := types.T_int64.ToType(), types.T_varchar.ToType()
 	idle := pool.GetVector(&fixedType)
-	AppendValue(idle, int64(42), false)
+	idle.MustAppendValue(int64(42), false)
 	ReleaseVector(idle)
 	held := pool.GetVector(&bytesType)
-	AppendValue(held, []byte("still valid"), false)
+	held.MustAppendValue([]byte("still valid"), false)
 	independent := other.GetVector(&fixedType)
-	AppendValue(independent, int64(17), false)
+	independent.MustAppendValue(int64(17), false)
 	before := mp.CurrNB()
 
 	pool.Close()
 	pool.Close()
 	require.Less(t, mp.CurrNB(), before)
-	require.Equal(t, []byte("still valid"), GetValue(held, 0))
-	require.Equal(t, int64(17), GetValue(independent, 0))
+	require.Equal(t, []byte("still valid"), held.GetValue(0))
+	require.Equal(t, int64(17), independent.GetValue(0))
 	ReleaseVector(held)
 	ReleaseVector(independent)
 	other.Close()
@@ -52,8 +52,8 @@ func TestVectorPoolClosePreservesBorrowers(t *testing.T) {
 	// A caller racing with or arriving after Close gets an ordinary, unpooled
 	// vector whose lifetime remains independent of the closed pool.
 	after := pool.GetVector(&fixedType)
-	AppendValue(after, int64(9), false)
-	require.Equal(t, int64(9), GetValue(after, 0))
+	after.MustAppendValue(int64(9), false)
+	require.Equal(t, int64(9), after.GetValue(0))
 	ReleaseVector(after)
 	require.Zero(t, mp.CurrNB())
 }
@@ -73,10 +73,10 @@ func TestVectorPoolCloseConcurrentBorrowAndReturn(t *testing.T) {
 		go func(worker int) {
 			defer done.Done()
 			held := pool.GetVector(&typ)
-			AppendValue(held, int64(worker), false)
+			held.MustAppendValue(int64(worker), false)
 			ready.Done()
 			<-release
-			if got := GetValue(held, 0); got != int64(worker) {
+			if got := held.GetValue(0); got != int64(worker) {
 				errCh <- fmt.Errorf("held vector: got %v, want %d", got, worker)
 				ReleaseVector(held)
 				return
@@ -84,8 +84,8 @@ func TestVectorPoolCloseConcurrentBorrowAndReturn(t *testing.T) {
 			ReleaseVector(held)
 			for i := 0; i < iterations; i++ {
 				v := pool.GetVector(&typ)
-				AppendValue(v, int64(i), false)
-				if got := GetValue(v, 0); got != int64(i) {
+				v.MustAppendValue(int64(i), false)
+				if got := v.GetValue(0); got != int64(i) {
 					errCh <- fmt.Errorf("vector: got %v, want %d", got, i)
 					ReleaseVector(v)
 					return

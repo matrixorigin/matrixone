@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -31,7 +32,7 @@ import (
 func TestCommitTSLoaderLoadsOnceAndReleases(t *testing.T) {
 	mp := mpool.MustNewZero()
 	commitTS := containers.MakeVector(types.T_TS.ToType(), mp)
-	containers.AppendValue(commitTS, types.BuildTS(5, 0), false)
+	commitTS.MustAppendValue(types.BuildTS(5, 0), false)
 
 	loads := 0
 	loader := &commitTSLoader{
@@ -95,26 +96,26 @@ func TestPersistedAppendableDedupSkipsAbortedRow(t *testing.T) {
 				keys := containers.MakeVector(typ, common.DefaultAllocator)
 				defer containers.ReleaseVector(keys)
 				if typ.Oid == types.T_int64 {
-					containers.AppendValue(data, int64(42), false)
-					containers.AppendValue(keys, int64(42), false)
+					data.MustAppendValue(int64(42), false)
+					keys.MustAppendValue(int64(42), false)
 				} else {
-					containers.AppendValue(data, []byte("pk"), false)
-					containers.AppendValue(keys, []byte("pk"), false)
+					data.MustAppendValue([]byte("pk"), false)
+					keys.MustAppendValue([]byte("pk"), false)
 				}
 				rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 				defer containers.ReleaseVector(rowIDs)
-				containers.AppendValue(rowIDs, nil, true)
+				rowIDs.MustAppendValue(nil, true)
 
 				commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
-				containers.AppendValue(commitTS, test.commitTS, false)
+				commitTS.MustAppendValue(test.commitTS, false)
 				var abort containers.Vector
 				if test.aborted {
 					abort = containers.MakeVector(types.T_bool.ToType(), common.DefaultAllocator)
-					containers.AppendValue(abort, true, false)
+					abort.MustAppendValue(true, false)
 				} else {
-					abort = containers.NewConstNullVector(
-						types.T_bool.ToType(), 1, common.DefaultAllocator,
-					)
+					abort = vector.NewConstNull(
+						types.T_bool.ToType(), 1, common.DefaultAllocator)
+
 				}
 				loader := &commitTSLoader{
 					load: func() (containers.Vector, containers.Vector, error) {
@@ -153,24 +154,24 @@ func TestPersistedTombstoneContainsSkipsAbortedMatches(t *testing.T) {
 		commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
 		var abortVec containers.Vector
 		if aborts == nil {
-			abortVec = containers.NewConstNullVector(
+			abortVec = vector.NewConstNull(
 				types.T_bool.ToType(),
 				len(commitTSs),
-				common.DefaultAllocator,
-			)
+				common.DefaultAllocator)
+
 		} else {
 			abortVec = containers.MakeVector(types.T_bool.ToType(), common.DefaultAllocator)
 		}
 		for row, ts := range commitTSs {
-			containers.AppendValue(persisted, target, false)
-			containers.AppendValue(commitTS, ts, false)
+			persisted.MustAppendValue(target, false)
+			commitTS.MustAppendValue(ts, false)
 			if aborts != nil {
-				containers.AppendValue(abortVec, aborts[row], false)
+				abortVec.MustAppendValue(aborts[row], false)
 			}
 		}
 		keys := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 		defer containers.ReleaseVector(keys)
-		containers.AppendValue(keys, target, false)
+		keys.MustAppendValue(target, false)
 
 		op := containers.MakeForeachVectorOp(
 			types.T_Rowid,
@@ -239,11 +240,11 @@ func TestMissingCommitTSFollowsDedupPolicy(t *testing.T) {
 				{
 					name: "null row",
 					make: func() containers.Vector {
-						return containers.NewConstNullVector(
+						return vector.NewConstNull(
 							types.T_TS.ToType(),
 							1,
-							common.DefaultAllocator,
-						)
+							common.DefaultAllocator)
+
 					},
 				},
 			} {
@@ -253,11 +254,11 @@ func TestMissingCommitTSFollowsDedupPolicy(t *testing.T) {
 					keys := containers.MakeVector(typ, common.DefaultAllocator)
 					defer containers.ReleaseVector(keys)
 					if typ.Oid == types.T_int64 {
-						containers.AppendValue(data, int64(1), false)
-						containers.AppendValue(keys, int64(1), false)
+						data.MustAppendValue(int64(1), false)
+						keys.MustAppendValue(int64(1), false)
 					} else {
-						containers.AppendValue(data, []byte("pk"), false)
-						containers.AppendValue(keys, []byte("pk"), false)
+						data.MustAppendValue([]byte("pk"), false)
+						keys.MustAppendValue([]byte("pk"), false)
 					}
 
 					rowIDs := containers.MakeVector(
@@ -265,7 +266,7 @@ func TestMissingCommitTSFollowsDedupPolicy(t *testing.T) {
 						common.DefaultAllocator,
 					)
 					defer containers.ReleaseVector(rowIDs)
-					containers.AppendValue(rowIDs, nil, true)
+					rowIDs.MustAppendValue(nil, true)
 
 					commitTS := commitTSCase.make()
 					loader := &commitTSLoader{
@@ -311,11 +312,11 @@ func TestCommitTSAtDedupLowerBoundIsIncluded(t *testing.T) {
 			keys := containers.MakeVector(typ, common.DefaultAllocator)
 			defer containers.ReleaseVector(keys)
 			if typ.Oid == types.T_int64 {
-				containers.AppendValue(data, int64(1), false)
-				containers.AppendValue(keys, int64(1), false)
+				data.MustAppendValue(int64(1), false)
+				keys.MustAppendValue(int64(1), false)
 			} else {
-				containers.AppendValue(data, []byte("pk"), false)
-				containers.AppendValue(keys, []byte("pk"), false)
+				data.MustAppendValue([]byte("pk"), false)
+				keys.MustAppendValue([]byte("pk"), false)
 			}
 
 			rowIDs := containers.MakeVector(
@@ -323,13 +324,13 @@ func TestCommitTSAtDedupLowerBoundIsIncluded(t *testing.T) {
 				common.DefaultAllocator,
 			)
 			defer containers.ReleaseVector(rowIDs)
-			containers.AppendValue(rowIDs, nil, true)
+			rowIDs.MustAppendValue(nil, true)
 
 			commitTS := containers.MakeVector(
 				types.T_TS.ToType(),
 				common.DefaultAllocator,
 			)
-			containers.AppendValue(commitTS, from, false)
+			commitTS.MustAppendValue(from, false)
 			loader := &commitTSLoader{
 				load: func() (containers.Vector, containers.Vector, error) {
 					return commitTS, nil, nil
@@ -368,11 +369,11 @@ func TestCommitTSIsNotLoadedWithoutExactPKMatch(t *testing.T) {
 			keys := containers.MakeVector(typ, common.DefaultAllocator)
 			defer containers.ReleaseVector(keys)
 			if typ.Oid == types.T_int64 {
-				containers.AppendValue(data, int64(1), false)
-				containers.AppendValue(keys, int64(2), false)
+				data.MustAppendValue(int64(1), false)
+				keys.MustAppendValue(int64(2), false)
 			} else {
-				containers.AppendValue(data, []byte("stored"), false)
-				containers.AppendValue(keys, []byte("incoming"), false)
+				data.MustAppendValue([]byte("stored"), false)
+				keys.MustAppendValue([]byte("incoming"), false)
 			}
 
 			rowIDs := containers.MakeVector(
@@ -380,7 +381,7 @@ func TestCommitTSIsNotLoadedWithoutExactPKMatch(t *testing.T) {
 				common.DefaultAllocator,
 			)
 			defer containers.ReleaseVector(rowIDs)
-			containers.AppendValue(rowIDs, nil, true)
+			rowIDs.MustAppendValue(nil, true)
 
 			loads := 0
 			loader := &commitTSLoader{
@@ -416,7 +417,7 @@ func BenchmarkFunctions(b *testing.B) {
 		rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 		b.Cleanup(func() { containers.ReleaseVector(rowIDs) })
 		for range length {
-			containers.AppendValue(rowIDs, nil, true)
+			rowIDs.MustAppendValue(nil, true)
 		}
 		return rowIDs
 	}
@@ -433,7 +434,7 @@ func BenchmarkFunctions(b *testing.B) {
 	vec2 := containers.MakeVector(*vec.GetType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(vec2)
 	for i := 9999999; i < 9999999+1000; i++ {
-		containers.AppendValue(vec2, int64(i), false)
+		vec2.MustAppendValue(int64(i), false)
 	}
 
 	b.Run("new-dedup-int64", func(b *testing.B) {
@@ -451,9 +452,11 @@ func BenchmarkFunctions(b *testing.B) {
 
 	vec3 := containers.MockVector(types.T_decimal128.ToType(), 20000, true, nil)
 	defer containers.ReleaseVector(vec3)
-	vec4 := containers.CloneWindow(vec3, 0, 10000, vec3.MPool() /* REVIEW: CloneWindow pool */)
+	vec4, err := vec3.CloneWindow(0, 10000, vec3.MPool())
+	require.NoError(b, err)
 	defer containers.ReleaseVector(vec4)
-	vec5 := containers.CloneWindow(vec3, 11000, 100, vec3.MPool() /* REVIEW: CloneWindow pool */)
+	vec5, err := vec3.CloneWindow(11000, 11100, vec3.MPool())
+	require.NoError(b, err)
 	defer containers.ReleaseVector(vec5)
 
 	b.Run("new-dedup-d128", func(b *testing.B) {
@@ -471,9 +474,11 @@ func BenchmarkFunctions(b *testing.B) {
 
 	vec6 := containers.MockVector2(types.T_varchar.ToType(), 12000, 0)
 	defer containers.ReleaseVector(vec6)
-	vec7 := containers.CloneWindow(vec6, 0, 10000, vec6.MPool() /* REVIEW: CloneWindow pool */)
+	vec7, err := vec6.CloneWindow(0, 10000, vec6.MPool())
+	require.NoError(b, err)
 	defer containers.ReleaseVector(vec7)
-	vec8 := containers.CloneWindow(vec6, 10500, 10, vec6.MPool() /* REVIEW: CloneWindow pool */)
+	vec8, err := vec6.CloneWindow(10500, 10510, vec6.MPool())
+	require.NoError(b, err)
 	defer containers.ReleaseVector(vec8)
 
 	b.Run("new-dedup-chars", func(b *testing.B) {
@@ -526,10 +531,10 @@ func TestPersistedContainsReturnsTombstoneBitmapCapacityError(t *testing.T) {
 			rowID := types.NewRowid(&blk, 7)
 			persisted := containers.MakeVector(typ, common.DefaultAllocator)
 			defer containers.ReleaseVector(persisted)
-			containers.AppendValue(persisted, rowID, false)
+			persisted.MustAppendValue(rowID, false)
 			keys := containers.MakeVector(typ, pool)
 			defer containers.ReleaseVector(keys)
-			containers.AppendValue(keys, rowID, false)
+			keys.MustAppendValue(rowID, false)
 
 			op := containers.MakeForeachVectorOp(typ.Oid, containsNABlkFunctions, persisted, keys)
 			if appendable {
@@ -538,7 +543,7 @@ func TestPersistedContainsReturnsTombstoneBitmapCapacityError(t *testing.T) {
 					typ.Oid, containsAlkFunctions, persisted, keys,
 					func(uint16) (containers.Vector, containers.Vector, error) {
 						commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
-						containers.AppendValue(commitTS, types.BuildTS(5, 0), false)
+						commitTS.MustAppendValue(types.BuildTS(5, 0), false)
 						return commitTS, nil, nil
 					},
 					txn,

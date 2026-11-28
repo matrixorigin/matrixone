@@ -328,8 +328,8 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 		objID := id.ObjectID()
 		_, blkOffset := id.BlockID.Offsets()
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*objID, blkOffset, offset)
-		containers.AppendValue(rowIDs, rowID, false)
-		containers.AppendValue(pks, val, false)
+		rowIDs.MustAppendValue(rowID, false)
+		pks.MustAppendValue(val, false)
 	}
 
 	s3stats, err := MockCNDeleteInS3(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
@@ -410,14 +410,14 @@ func (e *TestEngine) CheckCollectTombstoneInRange() {
 			deleteRowIDs := deleteBatch.Vecs[0]
 			deletePKs := deleteBatch.Vecs[1]
 			for i := 0; i < deleteRowIDs.Length(); i++ {
-				rowID := containers.GetValue(deleteRowIDs, i).(types.Rowid)
+				rowID := deleteRowIDs.GetValue(i).(types.Rowid)
 				offset := rowID.GetRowOffset()
 				id := obj.Fingerprint()
 				id.BlockID = *rowID.BorrowBlockID()
 				val, _, err := rel.GetValue(id, offset, uint16(pkDef.Idx), true)
 				assert.NoError(e.T, err)
-				e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), containers.GetValue(deletePKs, i), rowID.String(), val)
-				assert.Equal(e.T, val, containers.GetValue(deletePKs, i))
+				e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.GetValue(i), rowID.String(), val)
+				assert.Equal(e.T, val, deletePKs.GetValue(i))
 			}
 		}
 		return nil
