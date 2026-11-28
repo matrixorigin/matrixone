@@ -2206,10 +2206,14 @@ func EncodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 	pipe.PartialResultTypes = make([]uint32, len(merge.PartialResultTypes))
 	pipe.PartialResults = make([]byte, 0)
 	for i, oid := range merge.PartialResultTypes {
-		pipe.PartialResultTypes[i] = uint32(oid)
-		if mergePartialResultEncoded(oid) {
-			pipe.PartialResults = append(pipe.PartialResults, vector.RawFromValue(oid, merge.PartialResults[i])...)
+		if merge.PartialResults[i] == nil || !mergePartialResultEncoded(oid) {
+			// no block contributed a value: sent as T_any with no bytes, so
+			// every later aggregate keeps its position
+			pipe.PartialResultTypes[i] = uint32(types.T_any)
+			continue
 		}
+		pipe.PartialResultTypes[i] = uint32(oid)
+		pipe.PartialResults = append(pipe.PartialResults, vector.RawFromValue(oid, merge.PartialResults[i])...)
 	}
 }
 
@@ -2219,12 +2223,15 @@ func mergePartialResultEncoded(oid types.T) bool {
 	return vector.SupportsAny(oid) && !oid.ToType().IsVarlen()
 }
 
+// DecodeMergeGroup is the inverse of EncodeMergeGroup. PartialResults has one
+// slot per aggregate (nil for T_any), since the merge reads it by position.
 func DecodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 	if pipe.PartialResults == nil {
 		return
 	}
 	merge.PartialResultTypes = make([]types.T, len(pipe.PartialResultTypes))
-	merge.PartialResults = make([]any, 0)
+	merge.PartialResults = make([]any, len(pipe.PartialResultTypes))
+	data := pipe.PartialResults
 	for i := range merge.PartialResultTypes {
 		oid := types.T(pipe.PartialResultTypes[i])
 		merge.PartialResultTypes[i] = oid
@@ -2232,7 +2239,7 @@ func DecodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 			continue
 		}
 		size := oid.FixedLength()
-		merge.PartialResults = append(merge.PartialResults, vector.ValueFromRaw(oid, pipe.PartialResults[:size]))
-		pipe.PartialResults = pipe.PartialResults[size:]
+		merge.PartialResults[i] = vector.ValueFromRaw(oid, data[:size])
+		data = data[size:]
 	}
 }

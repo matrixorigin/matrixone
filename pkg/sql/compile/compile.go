@@ -10479,26 +10479,53 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 			partialResults[i] = partialResults[i].(int64) - int64(nullCnt)
 		case "min", "max":
 			col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-			zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
-			if zm.GetType().FixedLength() < 0 {
-				return &moerr.Error{}
-			}
-			bound, want := zm.GetMin(), -1
-			if name == "max" {
-				bound, want = zm.GetMax(), 1
-			}
-			if bound == nil {
-				// no bound recorded (an all-NULL block, or a type whose zone
-				// map keeps none): read the column instead
-				return &moerr.Error{}
-			}
-			if partialResults[i] == nil {
-				partialResults[i] = bound
-				partialResultTypes[i] = zm.GetType()
-			} else if compute.CompareGeneric(bound, partialResults[i], zm.GetType()) == want {
-				partialResults[i] = bound
+			colMeta := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)]))
+			if err := mergeZoneMapPartial(name == "min", colMeta.ZoneMap(), blkMeta.GetRows(), colMeta.NullCnt(), &partialResults[i], &partialResultTypes[i]); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+// mergeZoneMapPartial folds one block's zone map into a metadata-only MIN or
+// MAX partial result, through the shared per-type comparison, so every
+// fixed-size type the zone map records is handled with no case here. A block
+// with no bound contributes nothing when all its rows are NULL; otherwise
+// (values but no zone map, as for decimal256) its values are unknown and the
+// metadata path is declined, so the caller reads the column.
+func mergeZoneMapPartial(isMin bool, zm objectio.ZoneMap, rows, nullCnt uint32, partial *any, partialType *types.T) error {
+	t := zm.GetType()
+	if t.FixedLength() < 0 {
+		return moerr.NewInternalErrorNoCtxf("aggregate metadata optimization: unsupported zone map type %s", t.String())
+	}
+	var bound any
+	if zm.IsInited() {
+		if isMin {
+			bound = zm.GetMin()
+		} else {
+			bound = zm.GetMax()
+		}
+	}
+	if bound == nil {
+		if nullCnt >= rows {
+			return nil
+		}
+		return moerr.NewInternalErrorNoCtx("aggregate metadata optimization: zone map has no bound")
+	}
+	if *partial == nil {
+		*partial, *partialType = bound, t
+		return nil
+	}
+	if *partialType != t {
+		return moerr.NewInternalErrorNoCtxf("aggregate metadata optimization: zone map type %s, partial result type %s", t.String(), partialType.String())
+	}
+	want := 1
+	if isMin {
+		want = -1
+	}
+	if compute.CompareGeneric(bound, *partial, t) == want {
+		*partial = bound
 	}
 	return nil
 }
