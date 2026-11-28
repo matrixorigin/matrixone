@@ -33,7 +33,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@254a50577c60d54ec593c4ca9cecff13ad26a9e9
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-native.yaml@3699b06e916baa618ca143416b91fa4d8858a8b3
     with:
       bvt_generation: ${{ inputs.bvt_generation }}
       enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
@@ -41,9 +41,3 @@ jobs:
       COVERAGE_PR_READ_TOKEN: ${{ secrets.COVERAGE_PR_READ_TOKEN }}
       TEST_S3FS_ALIYUN: ${{ secrets.TEST_S3FS_ALIYUN }}
       TEST_S3FS_QCLOUD: ${{ secrets.TEST_S3FS_QCLOUD }}
-      S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
-      S3REGION: ${{ secrets.S3REGION }}
-      S3APIKEY: ${{ secrets.S3APIKEY }}
-      S3APISECRET: ${{ secrets.S3APISECRET }}
-      S3BUCKET: ${{ secrets.S3BUCKET }}
-      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
