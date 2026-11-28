@@ -55,7 +55,25 @@ func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
 	return fs
 }
 
+// Tests that seed a synthetic role policy can use it without a storage engine
+// or a logtail subscription. Empty seeds are meaningful for protocol fixtures.
+func stubSeededRoleRuleCache(t *testing.T) {
+	t.Helper()
+	previous := captureRoleRuleCache
+	captureRoleRuleCache = func(ctx context.Context, ses *Session) (*roleRuleCache, error) {
+		ses.ruleCacheMu.RLock()
+		cache := ses.ruleCache
+		ses.ruleCacheMu.RUnlock()
+		if cache != nil {
+			return cache, nil
+		}
+		return previous(ctx, ses)
+	}
+	t.Cleanup(func() { captureRoleRuleCache = previous })
+}
+
 func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
+	stubSeededRoleRuleCache(t)
 	var err error
 	var testPool *mpool.MPool
 	//parameter
@@ -91,6 +109,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+	ses.ruleCache = &roleRuleCache{}
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()

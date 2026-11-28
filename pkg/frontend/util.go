@@ -255,7 +255,11 @@ func getExprValueWithPrepareMeta(
 		},
 	}
 
-	//2.run the select
+	// SET expressions can read tables through scalar subqueries. Apply the
+	// active role rules to the generated SELECT before executing it.
+	if err := applyRoleRulesToSetExpression(execCtx, ses, compositedSelect, e, preparedExpression); err != nil {
+		return nil, err
+	}
 
 	//run the statement in the same session
 	ses.ClearResultBatches()
@@ -264,7 +268,11 @@ func getExprValueWithPrepareMeta(
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
-	defer tempExecCtx.Close()
+	tempExecCtx.inheritAuthorizationSnapshot(execCtx)
+	defer func() {
+		tempExecCtx.Close()
+		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	}()
 	err = executeStmtInSameSession(
 		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
@@ -1887,7 +1895,9 @@ func (ui *UserInput) isPreparedExpr() bool {
 }
 
 func (ui *UserInput) canUsePlanCache() bool {
-	return ui != nil && !ui.isSetExpression
+	// The SQL cache key does not include the directory proof for case-sensitive role targets.
+	return ui != nil && !ui.isSetExpression && (!ui.rewritePolicy.hasRoleRules() ||
+		ui.rewritePolicy.roleRules.lowerCaseTableNames == 1)
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {

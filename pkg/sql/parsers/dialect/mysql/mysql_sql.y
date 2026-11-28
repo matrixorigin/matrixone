@@ -3978,16 +3978,16 @@ alter_role_stmt:
     {
         var roleName = $3.Compare()
         var ruleSQL = $6
-        var dbName = $9.Compare()
-        var tblName = $11.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblName($9.Origin())
+        var tblName = yylex.(*Lexer).GetDbOrTblName($11.Origin())
         var ruleName = dbName + "." + tblName
         $$ = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
     }
 |   ALTER ROLE role_name DROP RULE ON TABLE ident '.' ident
     {
         var roleName = $3.Compare()
-        var dbName = $8.Compare()
-        var tblName = $10.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblName($8.Origin())
+        var tblName = yylex.(*Lexer).GetDbOrTblName($10.Origin())
         $$ = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
     }
 

@@ -1386,6 +1386,7 @@ func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string)
 	defer ses.ReplaceResponser(liveResponder)
 
 	tempExecCtx := ExecCtx{ses: ses, reqCtx: outerExecCtx.reqCtx}
+	tempExecCtx.inheritAuthorizationSnapshot(outerExecCtx)
 	defer func() {
 		tempExecCtx.Close()
 		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
@@ -1823,9 +1824,22 @@ func doPrepareStmtInSession(
 	sql string,
 	paramTypes []byte,
 ) (*PrepareStmt, error) {
-	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(owner))
+	sqlMode := sessionSQLModeForParser(owner)
+	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sqlMode)
 	if err != nil {
 		return nil, err
+	}
+	if execCtx.rewriteEnabled {
+		if execCtx.input != nil && !execCtx.input.rewritePolicyMaterialized {
+			originSql, err = rewriteSQLFromMaterializedPolicy(
+				execCtx.reqCtx, sql, originSql, optionalRewritesEnabled(execCtx, owner))
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err = addStatementRewriteHints(execCtx.reqCtx, []tree.Statement{st.Stmt}, originSql, sqlMode, execCtx.input); err != nil {
+			return nil, err
+		}
 	}
 	prepareStmt, err := createPrepareStmtInSession(execCtx, owner, executionSes, originSql, st, st.Stmt)
 	if err != nil {
@@ -1913,11 +1927,18 @@ func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *E
 	return prepareStmt, nil
 }
 
+func optionalRewritesEnabled(execCtx *ExecCtx, ses *Session) bool {
+	if execCtx.input != nil && execCtx.input.rewritePolicy != nil {
+		return execCtx.input.rewritePolicy.sessionEnabled
+	}
+	return ses.rewriteEnabled.Load()
+}
+
 func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string, tree.Statement, map[string]string, error) {
 	rewritten := sql
 	var err error
 	if execCtx.rewriteEnabled {
-		rewritten, err = rewriteSQLFromMaterializedPolicy(execCtx.reqCtx, execCtx.sqlOfStmt, sql)
+		rewritten, err = rewriteSQLFromMaterializedPolicy(execCtx.reqCtx, execCtx.sqlOfStmt, sql, optionalRewritesEnabled(execCtx, ses))
 		if err != nil {
 			return sql, nil, nil, err
 		}
@@ -1948,7 +1969,7 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	var remapDb map[string]string
 	if execCtx.rewriteEnabled {
 		parserSQLMode := sessionSQLModeForParser(ses)
-		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, rewritten, parserSQLMode); err != nil {
+		if err = addStatementRewriteHints(execCtx.reqCtx, stmts, rewritten, parserSQLMode, execCtx.input); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
@@ -2019,6 +2040,12 @@ func createPrepareStmtInSession(
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
+	var roleRules *roleRuleCache
+	var optionalRewrites bool
+	if execCtx.input != nil && execCtx.input.rewritePolicy != nil {
+		roleRules = execCtx.input.rewritePolicy.roleRules
+		optionalRewrites = execCtx.input.rewritePolicy.sessionEnabled
+	}
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan && canCachePreparedMetadataCompile(saveStmt) &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
@@ -2054,6 +2081,8 @@ func createPrepareStmtInSession(
 		protocolVersion:     protocolVersion,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
+		roleRules:           roleRules,
+		optionalRewrites:    optionalRewrites,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
@@ -3231,8 +3260,8 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
-	// COM_QUERY carries the switch captured before its first statement. Other
-	// protocols retain their existing session-level behavior.
+	// Client query and prepare inputs carry the policy captured at their
+	// protocol boundary.
 	if execCtx.input.rewritePolicy != nil {
 		execCtx.rewriteEnabled = execCtx.input.rewritePolicy.enabled
 	} else {
@@ -3356,8 +3385,9 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			return nil, err
 		}
 		if execCtx.rewriteEnabled {
-			err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode)
+			err = addStatementRewriteHints(execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode, execCtx.input)
 			if err != nil {
+				freeStatements(stmts)
 				return nil, err
 			}
 			// Apply remapdb (database-name substitution) on the parsed AST
@@ -3534,7 +3564,28 @@ func hasStatement(fragment string, parserSQLMode string) bool {
 }
 
 func mayNeedSQLModeStaging(sql string) bool {
-	return strings.Contains(sql, ";") && strings.Contains(strings.ToLower(sql), "sql_mode")
+	if !strings.Contains(sql, ";") {
+		return false
+	}
+	lower := strings.ToLower(sql)
+	return strings.Contains(lower, "sql_mode") || strings.Contains(lower, "role") ||
+		strings.Contains(lower, "grant") || strings.Contains(lower, "revoke") || strings.Contains(lower, "drop")
+}
+
+func changesStatementPolicy(stmt tree.Statement) bool {
+	return changesRoleRuleCatalog(stmt) || isSessionSQLModeSet(stmt)
+}
+
+func changesRoleRuleCatalog(stmt tree.Statement) bool {
+	switch s := stmt.(type) {
+	case *tree.SetRole, *tree.AlterRoleAddRule, *tree.AlterRoleDropRule, *tree.DropRole, *tree.DropUser:
+		return true
+	case *tree.Grant:
+		return s.Typ == tree.GrantTypeRole
+	case *tree.Revoke:
+		return s.Typ == tree.RevokeTypeRole
+	}
+	return false
 }
 
 func prepareSQLModeStagedExecution(
@@ -3542,6 +3593,7 @@ func prepareSQLModeStagedExecution(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	sql string,
+	snapshotEachStatement bool,
 ) (first string, remaining string, staged bool, err error) {
 	lctn := parserLowerCaseTableNames(ses)
 	parserSQLMode := sessionSQLModeForParser(ses)
@@ -3549,12 +3601,12 @@ func prepareSQLModeStagedExecution(
 	if parseErr == nil {
 		stageAt := -1
 		for i, stmt := range stmts {
-			if isSessionSQLModeSet(stmt) {
+			if changesStatementPolicy(stmt) {
 				stageAt = i
 				break
 			}
 		}
-		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
+		shouldStage := len(stmts) > 1 && (snapshotEachStatement || stageAt >= 0 && stageAt < len(stmts)-1)
 		freeStatements(stmts)
 		if !shouldStage {
 			return "", "", false, nil
@@ -4431,7 +4483,7 @@ func dispatchStmt(ses FeSession,
 				return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
 			}
 			if execCtx.rewriteEnabled {
-				if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
+				if err = addStatementRewriteHints(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses), execCtx.input); err != nil {
 					return err
 				}
 				remaps := make([]map[string]string, len(execCtx.cws))
@@ -4646,6 +4698,7 @@ func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr
 	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
 		return
 	}
+	execCtx.txnOpt.byRollback = true
 	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
 		// The statement's own error is what the client asked about; a failure
 		// to roll back is logged, not substituted for it.
@@ -4654,10 +4707,20 @@ func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr
 	}
 }
 
+func beginStatementAuthorization(ses *Session, execCtx *ExecCtx) {
+	execCtx.ses = ses
+	execCtx.resetAuthorization()
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+}
+
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
+	if input.rewritePolicy == nil && !input.isSetExpression {
+		execCtx.resetAuthorization()
+	}
+	execCtx.ses = ses
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
@@ -4786,12 +4849,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	stagedSQLMode := false
 	stagedRemaining := ""
 	var err error
-	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
+	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() &&
+		(input.rewritePolicy != nil && strings.Contains(input.getSql(), ";") || mayNeedSQLModeStaging(input.getSql())) {
 		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
 			execCtx.reqCtx,
 			ses,
 			ses.GetMySQLParser(),
 			input.getSql(),
+			input.rewritePolicy != nil,
 		)
 		if stageErr != nil {
 			err = stageErr
@@ -4932,7 +4997,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
-		execCtx.resetAuthorization()
+		if i > 0 && !stagedSQLMode {
+			beginStatementAuthorization(ses, execCtx)
+		}
 		execCtx.prepareStmt = nil
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
@@ -5024,10 +5091,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		if stagedSQLMode && hasMoreStatements {
-			// SET expressions may execute an internal query, which temporarily
-			// replaces the compiler context's ExecCtx. Restore this outer query
-			// before planning the next staged statement.
-			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			beginStatementAuthorization(ses, execCtx)
+			if input.rewritePolicy != nil {
+				policy, policyErr := input.rewritePolicy.withCurrentRoleRules(execCtx.reqCtx, ses)
+				if policyErr != nil {
+					return policyErr
+				}
+				refreshedInput := *input
+				refreshedInput.rewritePolicy = policy
+				input = &refreshedInput
+			}
 			nextInput, remaining, nextErr := nextSQLModeStatementInput(
 				execCtx.reqCtx,
 				ses,
@@ -5230,12 +5303,25 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		// Capture policy before choosing a query execution path. Privilege
+		// checks in doComQuery use this same statement authorization view.
+		beginStatementAuthorization(ses, execCtx)
+		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
+		if rewriteErr != nil {
+			if !isStandaloneRoleRuleControl(execCtx.reqCtx, query, sessionSQLModeForParser(ses)) {
+				ses.resetDiagnostics()
+				markRowCountFailed(ses, ses.GetProc())
+				rollbackWholeTxnOnPreExecutionError(ses, execCtx, rewriteErr)
+				return NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr), nil
+			}
+			rewritePolicy = &rewritePolicySnapshot{}
+		}
 		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
 		// before normal processing. If sidecar is not configured, silently
 		// fall through to normal MO execution.
 		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
+			if rewriteErr != nil || rewritePolicy.hasRoleRules() || sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
 				query = stripSidecarHint(query)
 			} else {
 				err = handleSidecarOffload(ses, execCtx, query, useGPU)
@@ -5258,15 +5344,6 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		} else {
 			ses.addSqlCount(1)
 		}
-		// Freeze the policy once, then let doComQuery materialize it under the
-		// SQL mode current for each staged statement.
-		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
-		if rewriteErr != nil {
-			ses.resetDiagnostics()
-			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-			return resp, nil
-		}
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query, rewritePolicy: rewritePolicy}
 		err = doComQuery(ses, execCtx, input)
@@ -5282,7 +5359,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_INIT_DB:
 		var dbname = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		query := "use `" + dbname + "`"
+		query := "use " + quoteIdentifierForSQL(dbname)
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, ses.GetTxnHandler().GetServerStatus(), err)
@@ -5308,17 +5385,20 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		beginStatementAuthorization(ses, execCtx)
+		policy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
+		if rewriteErr == nil {
+			sql, rewriteErr = policy.rewrite(execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
+		}
+		if rewriteErr != nil {
+			ses.resetDiagnostics()
+			markRowCountFailed(ses, ses.GetProc())
+			rollbackWholeTxnOnPreExecutionError(ses, execCtx, rewriteErr)
+			return NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr), nil
+		}
+
 		var preparedRemapDb map[string]string
-		// Inject rewrite rules hint before prepare wrapping (only if enabled)
-		if ses.rewriteEnabled.Load() {
-			var rewriteErr error
-			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
-			if rewriteErr != nil {
-				ses.resetDiagnostics()
-				markRowCountFailed(ses, ses.GetProc())
-				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-				return resp, nil
-			}
+		if policy.sessionEnabled {
 			preparedRemapDb = extractInlineRemapDb(sql)
 		}
 		ses.addSqlCount(1)
@@ -5330,7 +5410,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, remapDb: preparedRemapDb})
+		err = doComQuery(ses, execCtx, &UserInput{
+			sql:                       sql,
+			remapDb:                   preparedRemapDb,
+			rewritePolicy:             policy,
+			rewritePolicyMaterialized: true,
+		})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 		} else {

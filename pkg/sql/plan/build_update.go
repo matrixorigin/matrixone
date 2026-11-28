@@ -95,6 +95,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 	// new logic
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.roleRuleRowLocalWrite = stmt.RewriteOption != nil && len(stmt.RewriteOption.RoleRules) != 0
 	queryBindCtx := NewBindContext(builder, nil)
 	if hasRepeatedUpdateTarget(tblInfo) {
 		return buildRepeatedUpdatePlan(stmt, ctx, builder, queryBindCtx, tblInfo)

@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
@@ -36,6 +35,9 @@ func (c *clientConn) migrateConnFromContext(
 ) (*query.MigrateConnFromResponse, error) {
 	if parent == nil {
 		parent = context.Background()
+	}
+	if c.queryClient == nil || c.moCluster == nil {
+		return nil, moerr.NewInternalError(parent, "migration source query service is unavailable")
 	}
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
@@ -51,7 +53,14 @@ func (c *clientConn) migrateConnFromContext(
 	if err != nil {
 		return nil, moerr.AttachCause(ctx, err)
 	}
+	if resp == nil {
+		return nil, moerr.NewInternalError(parent, "missing migration source response")
+	}
+	defer c.queryClient.Release(resp)
 	r := resp.MigrateConnFromResponse
+	if r == nil {
+		return nil, moerr.NewInternalError(parent, "missing migration source response")
+	}
 
 	c.log.Info("connection migrate from server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -62,7 +71,6 @@ func (c *clientConn) migrateConnFromContext(
 		zap.Int64("goId", goid.Get()),
 	)
 
-	defer c.queryClient.Release(resp)
 	return r, nil
 }
 
@@ -89,17 +97,7 @@ func (c *clientConn) migrateConnToContext(
 		return err
 	}
 
-	// First, we re-run the set variables statements.
-	for _, stmt := range c.migration.setVarStmts {
-		if _, err := execStmtWithContext(parent, sc, internalStmt{
-			cmdType: cmdQuery,
-			s:       stmt,
-		}, nil); err != nil {
-			v2.ProxyConnectCommonFailCounter.Inc()
-			return err
-		}
-	}
-	// The final control read above re-arms the frontend IOSession's
+	// The control read above re-arms the frontend IOSession's
 	// SessionTimeout. Clear that phase-owned deadline before the backend is
 	// handed to the tunnel; otherwise an actively used migrated connection can
 	// still expire at the end of the session timeout period.
@@ -122,8 +120,10 @@ func (c *clientConn) migrateConnToContext(
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
 		ConnID:           c.connID,
 		DB:               info.DB,
+		SetVarStmts:      c.migration.setVarStmts,
 		PrepareStmts:     info.PrepareStmts,
 		LastAffectedRows: info.LastAffectedRows,
+		RoleState:        info.RoleState,
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
 	defer cancel()
@@ -131,30 +131,41 @@ func (c *clientConn) migrateConnToContext(
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
-	c.queryClient.Release(resp)
+	if resp == nil {
+		return moerr.NewInternalError(parent, "missing migration destination response")
+	}
+	defer c.queryClient.Release(resp)
+	ack := resp.GetMigrateConnToResponse()
+	if ack == nil || !ack.Success {
+		return moerr.NewInternalError(parent, "destination did not acknowledge session migration")
+	}
 	return nil
 }
 
-func (c *clientConn) migrateConnContext(
-	ctx context.Context,
-	prevAddr string,
-	sc ServerConn,
-) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (c *clientConn) migrationSourceContext(ctx context.Context, prevAddr string) (*query.MigrateConnFromResponse, error) {
 	resp, err := c.migrateConnFromContext(ctx, prevAddr)
 	if err != nil {
-		return err
-	}
-	if resp == nil {
-		return moerr.NewInternalError(ctx, "bad response")
+		return nil, err
 	}
 	if !resp.UserLevelLockReleaseSupported {
-		return moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
+		return nil, moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
 	}
 	if len(resp.UserLevelLocks) > 0 {
-		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
+		return nil, moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
-	return c.migrateConnToContext(ctx, sc, resp)
+	if resp.RoleState == nil {
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	return resp, nil
+}
+
+func isMigrationRefusal(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) || isRetryableMigrationRefusal(err)
+}
+
+func isRetryableMigrationRefusal(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged) ||
+		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPreparedState) ||
+		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationRoleChanged) ||
+		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationTableNameModeChanged)
 }

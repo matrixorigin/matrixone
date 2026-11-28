@@ -693,8 +693,13 @@ func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
 		require.True(t, allocator.CheckBalance())
 	}()
 
+	deadline, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	ctx, cancel := context.WithCancelCause(deadline)
+	defer cancel(nil)
 	requestRead := make(chan error, 1)
 	go func() {
+		defer cancel(context.DeadlineExceeded)
 		header := make([]byte, frontend.PacketHeaderLength)
 		if _, err := io.ReadFull(remote, header); err != nil {
 			requestRead <- err
@@ -705,15 +710,10 @@ func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
 		requestRead <- err
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	started := time.Now()
 	_, err = sc.ExecStmtContext(ctx, internalStmt{cmdType: cmdQuery, s: "set transferred=1"}, nil)
-	require.Error(t, err)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(started), time.Second,
-		"context must override frontend's default 24-hour session read timeout")
 	require.NoError(t, <-requestRead)
+	require.NoError(t, deadline.Err(), "request receipt must trigger cancellation")
 }
 
 func TestServerConnRejectsOversizedBackendPacket(t *testing.T) {

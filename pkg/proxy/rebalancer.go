@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -250,7 +249,7 @@ func (r *rebalancer) handleTransfer(ctx context.Context) {
 		case tun := <-r.queue:
 			v2.ProxyTransferQueueSizeGauge.Set(float64(len(r.queue)))
 			if err := tun.transfer(ctx); err != nil {
-				if !moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+				if !isMigrationRefusal(err) {
 					r.logger.Error("failed to do transfer", zap.Error(err))
 				}
 			}

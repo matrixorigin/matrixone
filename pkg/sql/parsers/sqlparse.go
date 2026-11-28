@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -391,6 +392,18 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 	return db, table, true
 }
 
+// RoleRuleKey follows table binding, including case-insensitive system schemas.
+func RoleRuleKey(db, table string, lower int64) string {
+	if lower == 1 || RoleRuleAlwaysFolds(db) {
+		return strings.ToLower(db + "." + table)
+	}
+	return db + "." + table
+}
+
+func RoleRuleAlwaysFolds(db string) bool {
+	return slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(db))
+}
+
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
 // valid (unquoted) database identifier, and the source and destination sets must
 // be disjoint (forbidding chaining such as {"x":"y","y":"z"} and self-maps). It
@@ -486,6 +499,12 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
+	return AddRewriteHintsWithRoleRules(ctx, stmts, sql, sqlMode, nil, 1, nil)
+}
+
+// AddRewriteHintsWithRoleRules also marks and verifies the server-supplied
+// first layer for each protected table.
+func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, roleRules map[string]string, lower int64, provenFoldedTargets map[string]uint64) error {
 	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return err
@@ -510,14 +529,16 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 		case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete:
 			// SELECT and INSERT...SELECT carry the rewrite option for the planner
 			// (INSERT propagates it to its inner SELECT read-source, see below).
-			// UPDATE/DELETE are decoded only to validate the inline hint; their
-			// remapdb is applied at the AST level and table rewrites on their
-			// read-sources are not yet implemented.
+			// UPDATE and DELETE only carry the trusted policy for target
+			// validation. Optional remapdb is applied separately to the AST.
 		default:
 			continue
 		}
 		hint := strings.TrimSpace(hints[i])
 		if hint == "" || hint[0] != '{' {
+			if len(roleRules) != 0 {
+				return moerr.NewInvalidInput(ctx, "statement is missing its active role rules")
+			}
 			continue
 		}
 
@@ -525,10 +546,21 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 		if err != nil {
 			return err
 		}
+		for key, rule := range roleRules {
+			chain := rawChains[key]
+			if len(chain) == 0 || chain[0] != rule {
+				return moerr.NewInvalidInput(ctx, "statement is missing its active role rules")
+			}
+		}
 		if len(rawChains) == 0 && len(remapDb) == 0 {
 			continue
 		}
 		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
+		if len(roleRules) > 0 {
+			rewriteOption.RoleRules = make(map[string][]*tree.Rewrite, len(roleRules))
+			rewriteOption.RoleRuleLowerCaseTableNames = lower
+			rewriteOption.ProvenFoldedRoleTargets = provenFoldedTargets
+		}
 		if len(remapDb) > 0 {
 			rewriteOption.RemapDb = remapDb
 		}
@@ -538,11 +570,16 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 				return moerr.NewParseError(ctx, "statement")
 			}
 			chain := make([]*tree.Rewrite, 0, len(sqls))
-			for _, v := range sqls {
+			_, mandatory := roleRules[key]
+			for i, v := range sqls {
 				if v == "" {
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, 1, sqlMode)
+				ruleCaseMode := int64(1)
+				if i == 0 && mandatory {
+					ruleCaseMode = lower
+				}
+				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, ruleCaseMode, sqlMode)
 				if err != nil {
 					return moerr.NewParseError(ctx, err.Error())
 				}
@@ -555,6 +592,9 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 				chain = append(chain, &tree.Rewrite{TableName: table, DbName: db, Stmt: st})
 			}
 			rewriteOption.Rewrites[key] = chain
+			if mandatory {
+				rewriteOption.RoleRules[key] = chain[:1]
+			}
 		}
 		switch s := stmt.(type) {
 		case *tree.Select:
@@ -573,17 +613,27 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 				}
 				source = paren.Select
 			}
+		case *tree.Update:
+			if len(roleRules) != 0 {
+				s.RewriteOption = rewriteOption
+			}
+		case *tree.Delete:
+			if len(roleRules) != 0 {
+				s.RewriteOption = rewriteOption
+			}
 		case *tree.Insert:
 			// INSERT...SELECT: propagate the rewrite to the inner read-source so
 			// the planner rewrites the source table (issue #25186 / upstream
 			// #25310). RemapDb (if any) is applied separately at the AST level;
 			// the planner only consumes rewriteOption.Rewrites, so carrying the
 			// full option here is safe.
-			if s.Rows != nil {
-				s.Rows.RewriteOption = rewriteOption
-				if ps, ok := s.Rows.Select.(*tree.ParenSelect); ok && ps.Select != nil {
-					ps.Select.RewriteOption = rewriteOption
+			for source := s.Rows; source != nil; {
+				source.RewriteOption = rewriteOption
+				paren, ok := source.Select.(*tree.ParenSelect)
+				if !ok {
+					break
 				}
+				source = paren.Select
 			}
 		}
 	}

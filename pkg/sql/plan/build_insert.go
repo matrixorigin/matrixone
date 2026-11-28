@@ -98,6 +98,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.bindInsertRoleRules(stmt)
 
 	// Pass WITH clause from INSERT to SELECT if present
 	if stmt.With != nil && stmt.Rows != nil {
