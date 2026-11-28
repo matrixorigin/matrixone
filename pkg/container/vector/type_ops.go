@@ -40,6 +40,7 @@ type typeOps struct {
 	getAny         func(v *Vector, i int, deepCopy bool) any
 	appendAny      func(v *Vector, val any, mp *mpool.MPool) error        // a non-null value
 	setAny         func(v *Vector, i int, val any, mp *mpool.MPool) error // a non-null value
+	appendRaw      func(v *Vector, raw []byte, isNull bool, mp *mpool.MPool) error
 	shrink         func(v *Vector, sels []int64, negate bool)
 	shrinkByMask   func(v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64)
 	shuffle        func(v *Vector, sels []int64, mp *mpool.MPool) error
@@ -63,6 +64,14 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		},
 		setAny: func(v *Vector, i int, val any, _ *mpool.MPool) error {
 			return SetFixedAtNoTypeCheck(v, i, val.(T))
+		},
+		appendRaw: func(v *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
+			var val T
+			if !isNull {
+				// a NULL carries no payload: raw may be nil
+				val = types.DecodeFixed[T](raw)
+			}
+			return AppendFixed(v, val, isNull, mp)
 		},
 		shrink:         shrinkFixed[T],
 		shrinkByMask:   shrinkFixedByMask[T],
@@ -96,6 +105,9 @@ func varlenOps() typeOps {
 	}
 	ops.setAny = func(v *Vector, i int, val any, mp *mpool.MPool) error {
 		return SetBytesAt(v, i, val.([]byte), mp)
+	}
+	ops.appendRaw = func(v *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
+		return AppendBytes(v, raw, isNull, mp)
 	}
 	ops.unionAll = unionAllVarlen
 	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
@@ -222,4 +234,16 @@ func SetAny(vec *Vector, i int, val any, mp *mpool.MPool) error {
 		return moerr.NewInternalErrorNoCtxf("SetAny: unsupported type %s", vec.typ.String())
 	}
 	return ops.setAny(vec, i, val, mp)
+}
+
+// AppendRaw appends a value given as its raw bytes: the value's memory for a
+// fixed-size type (types.EncodeFixed), the bytes themselves for a varlena
+// type. A NULL needs no payload: raw is ignored when isNull is set, and may be
+// nil. It returns an error for a type SupportsAny rejects.
+func AppendRaw(vec *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
+	ops, ok := opsOf(vec)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("AppendRaw: unsupported type %s", vec.typ.String())
+	}
+	return ops.appendRaw(vec, raw, isNull, mp)
 }

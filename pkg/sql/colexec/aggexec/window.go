@@ -1203,70 +1203,12 @@ func (exec *valueWindowExec) appendNullEntry(result *vector.Vector) error {
 	return vector.AppendAny(result, nil, true, exec.mp)
 }
 
-// appendValueToVector appends a value to the result vector based on the type
+// appendValueToVector appends a value, given as its raw bytes, to the result
+// vector: a fixed-size value decoded as its type, a varlena value as bytes.
 func appendValueToVector(result *vector.Vector, data []byte, typ types.Type, mp *mpool.MPool) error {
-	if typ.IsVarlen() {
+	if typ.IsVarlen() || !vector.SupportsAny(typ.Oid) {
+		// varlena values, and types without vector operations, are bytes
 		return vector.AppendBytes(result, data, false, mp)
 	}
-
-	// For fixed-size types, we need to append based on the type
-	switch typ.Oid {
-	case types.T_bool:
-		return vector.AppendFixed(result, types.DecodeFixed[bool](data), false, mp)
-	case types.T_bit:
-		return vector.AppendFixed(result, types.DecodeFixed[uint64](data), false, mp)
-	case types.T_int8:
-		return vector.AppendFixed(result, types.DecodeFixed[int8](data), false, mp)
-	case types.T_int16:
-		return vector.AppendFixed(result, types.DecodeFixed[int16](data), false, mp)
-	case types.T_int32:
-		return vector.AppendFixed(result, types.DecodeFixed[int32](data), false, mp)
-	case types.T_int64:
-		return vector.AppendFixed(result, types.DecodeFixed[int64](data), false, mp)
-	case types.T_uint8:
-		return vector.AppendFixed(result, types.DecodeFixed[uint8](data), false, mp)
-	case types.T_uint16:
-		return vector.AppendFixed(result, types.DecodeFixed[uint16](data), false, mp)
-	case types.T_uint32:
-		return vector.AppendFixed(result, types.DecodeFixed[uint32](data), false, mp)
-	case types.T_uint64:
-		return vector.AppendFixed(result, types.DecodeFixed[uint64](data), false, mp)
-	case types.T_float32:
-		return vector.AppendFixed(result, types.DecodeFixed[float32](data), false, mp)
-	case types.T_bf16:
-		return vector.AppendFixed(result, types.DecodeFixed[types.BF16](data), false, mp)
-	case types.T_float16:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Float16](data), false, mp)
-	case types.T_float8:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Float8](data), false, mp)
-	case types.T_float4:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Float4](data), false, mp)
-	case types.T_float64:
-		return vector.AppendFixed(result, types.DecodeFixed[float64](data), false, mp)
-	case types.T_decimal64:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Decimal64](data), false, mp)
-	case types.T_decimal128:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Decimal128](data), false, mp)
-	case types.T_date:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Date](data), false, mp)
-	case types.T_datetime:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Datetime](data), false, mp)
-	case types.T_time:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Time](data), false, mp)
-	case types.T_timestamp:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Timestamp](data), false, mp)
-	case types.T_uuid:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Uuid](data), false, mp)
-	case types.T_TS:
-		return vector.AppendFixed(result, types.DecodeFixed[types.TS](data), false, mp)
-	case types.T_Rowid:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Rowid](data), false, mp)
-	case types.T_Blockid:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Blockid](data), false, mp)
-	case types.T_enum:
-		return vector.AppendFixed(result, types.DecodeFixed[types.Enum](data), false, mp)
-	default:
-		// For other types, try to append as bytes
-		return vector.AppendBytes(result, data, false, mp)
-	}
+	return vector.AppendRaw(result, data, false, mp)
 }
