@@ -66,7 +66,7 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		execAdmin("grant connect on account * to " + role)
 		execAdmin("grant select, update, delete on table " + target + " to " + role)
 		execAdmin("grant select, update on table " + other + " to " + role)
-		execAdmin("alter role " + role + " add rule '((select amount, id from " + target + " where tenant = 1))' on table " + target)
+		execAdmin("alter role " + role + " add rule '((select amount as Amount, id as ID from " + target + " where tenant = 1))' on table " + target)
 		execAdmin("create user " + user + " identified by '" + password + "' default role " + role)
 
 		dsn := fmt.Sprintf("sys#%s#%s:%s@tcp(127.0.0.1:%d)/%s?interpolateParams=false", user, role, password, port, db)
@@ -184,7 +184,7 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 			defer rows.Close()
 			columns, err := rows.Columns()
 			require.NoError(t, err, statement)
-			require.Equal(t, []string{"amount", "id"}, columns, statement)
+			require.Equal(t, []string{"Amount", "ID"}, columns, statement)
 			require.True(t, rows.Next(), statement)
 			var amount, id int
 			require.NoError(t, rows.Scan(&amount, &id), statement)

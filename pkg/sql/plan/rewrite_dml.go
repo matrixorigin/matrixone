@@ -41,15 +41,15 @@ func CheckDMLRewriteExplain(ctx context.Context, query *plan.Query) error {
 // A writable rewrite must keep the identity and values of each selected base
 // row. The DML projection still carries the full physical row for maintenance.
 type dmlTargetRewrite struct {
-	source         *tree.TableName
-	alias          string
-	tableIndex     int
-	tableID        uint64
-	key            string
-	chain          []*tree.Rewrite
-	layers         []dmlRewriteLayer
-	visible        map[string]int32
-	orderedColumns []string
+	source     *tree.TableName
+	alias      string
+	tableIndex int
+	tableID    uint64
+	key        string
+	chain      []*tree.Rewrite
+	layers     []dmlRewriteLayer
+	visible    map[string]int32
+	projection tree.SelectExprs
 }
 
 type dmlRewriteLayer struct {
@@ -114,7 +114,7 @@ func resolveDMLTargetRewrites(
 			}
 		}
 		if !def.IsTemporary && def.TableType == catalog.SystemOrdinaryRel {
-			target.layers, target.visible, target.orderedColumns = writableRewriteLayers(chain, def, database, table, policyDefault, lower)
+			target.layers, target.visible, target.projection = writableRewriteLayers(chain, def, database, table, policyDefault, lower)
 		}
 		if targets == nil {
 			targets = make(map[string]*dmlTargetRewrite)
@@ -126,7 +126,7 @@ func resolveDMLTargetRewrites(
 
 func writableRewriteLayers(
 	chain []*tree.Rewrite, def *plan.TableDef, database, table, defaultDatabase string, lower int64,
-) ([]dmlRewriteLayer, map[string]int32, []string) {
+) ([]dmlRewriteLayer, map[string]int32, tree.SelectExprs) {
 	visible := make(map[string]int32, len(def.Cols))
 	for i, col := range def.Cols {
 		if !col.Hidden {
@@ -135,7 +135,7 @@ func writableRewriteLayers(
 	}
 
 	layers := make([]dmlRewriteLayer, 0, len(chain))
-	var orderedColumns []string
+	var projection tree.SelectExprs
 	for _, rewrite := range chain {
 		if rewrite == nil {
 			return nil, nil, nil
@@ -167,9 +167,9 @@ func writableRewriteLayers(
 			projected[name] = pos
 		}
 		visible = projected
-		orderedColumns = names
+		projection = clause.Exprs
 	}
-	return layers, visible, orderedColumns
+	return layers, visible, projection
 }
 
 func (builder *QueryBuilder) enableDMLTargetRewrites(

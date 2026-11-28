@@ -424,12 +424,21 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	if target := builder.dmlReturningRewrite(); target != nil {
 		// Keep SINK_SCAN positions aligned with the final row image.
 		returnCtx.restrictDMLBinding(binding, target.visible)
-		if target.orderedColumns != nil {
-			binding.starColumnOrder = make([]int32, 0, len(target.orderedColumns))
-			for _, name := range target.orderedColumns {
-				if pos, ok := binding.colIdByName[name]; ok {
-					binding.starColumnOrder = append(binding.starColumnOrder, pos)
+		if target.projection != nil {
+			binding.starColumnOrder = make([]int32, 0, len(target.projection))
+			for _, expr := range target.projection {
+				// Writable projections consist only of direct columns.
+				col := expr.Expr.(*tree.UnresolvedName)
+				pos, ok := binding.colIdByName[strings.ToLower(col.ColName())]
+				if !ok {
+					return moerr.NewInternalError(builder.GetContext(), "DML RETURNING cannot bind a visible role column")
 				}
+				heading := col.ColNameOrigin()
+				if expr.As != nil && !expr.As.Empty() {
+					heading = expr.As.Origin()
+				}
+				binding.starColumnOrder = append(binding.starColumnOrder, pos)
+				binding.originCols[pos] = heading
 			}
 		}
 	}
