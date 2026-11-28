@@ -18,12 +18,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,6 +55,128 @@ func TestServiceSupervisorStopsRolesInDependencyOrder(t *testing.T) {
 
 	require.NoError(t, s.shutdown(context.Background()))
 	require.Equal(t, roles, stopped)
+}
+
+func TestManagedPythonWorkerExitDoesNotFailServiceSupervisor(t *testing.T) {
+	for _, exit := range []string{"0", "17"} {
+		t.Run(exit, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.py"), []byte("exit "+exit+"\n"), 0600))
+			lifecycle := newServiceSupervisor()
+			tasks := stopper.NewStopper("worker-exit-test")
+			t.Cleanup(tasks.Stop)
+			require.NoError(t, startManagedPythonWorker(python.Config{
+				Address: "127.0.0.1:0", Path: dir, Python: "/bin/sh",
+			}, tasks, lifecycle))
+
+			done := make(chan struct{})
+			go func() {
+				lifecycle.roles[serviceRolePython].wg.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Python worker role did not finish")
+			}
+			select {
+			case err := <-lifecycle.failureC():
+				t.Fatalf("worker exit delivered a database service failure: %v", err)
+			default:
+			}
+			require.NoError(t, lifecycle.stopRole(t.Context(), serviceRolePython))
+		})
+	}
+}
+
+func TestManagedPythonWorkerStartupFailureIsIsolated(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.py"), nil, 0600))
+	for _, tc := range []struct {
+		name string
+		cfg  python.Config
+	}{
+		{name: "invalid config"},
+		{name: "missing interpreter", cfg: python.Config{
+			Address: "127.0.0.1:0", Path: dir, Python: filepath.Join(dir, "missing-python"),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lifecycle := newServiceSupervisor()
+			tasks := stopper.NewStopper("worker-startup-test")
+			t.Cleanup(tasks.Stop)
+			require.NoError(t, startManagedPythonWorker(tc.cfg, tasks, lifecycle))
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, lifecycle.stopRole(ctx, serviceRolePython))
+			select {
+			case err := <-lifecycle.failureC():
+				t.Fatalf("worker startup delivered a database service failure: %v", err)
+			default:
+			}
+		})
+	}
+}
+
+func TestDedicatedPythonWorkerFailureWakesShutdown(t *testing.T) {
+	setLaunchTestHooks(t)
+	oldProfileInterval := *profileInterval
+	t.Cleanup(func() { *profileInterval = oldProfileInterval })
+	*profileInterval = 0
+	launchSleep = func(time.Duration) {}
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.py"), []byte("exit 17\n"), 0600))
+	for _, tc := range []struct {
+		name string
+		cfg  python.Config
+		want string
+	}{
+		{
+			name: "invalid config",
+			want: "invalid Python UDF worker configuration: internal error: missing python udf address",
+		},
+		{
+			name: "missing interpreter",
+			cfg: python.Config{
+				Address: "127.0.0.1:0", Path: dir, Python: filepath.Join(dir, "missing-python"),
+			},
+			want: "failed to start Python UDF worker",
+		},
+		{
+			name: "unexpected exit",
+			cfg:  python.Config{Address: "127.0.0.1:0", Path: dir, Python: "/bin/sh"},
+			want: "Python UDF worker exited unexpectedly: exit status 17",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lifecycle := newServiceSupervisor()
+			lifecycle.pythonWorkerRequired = true
+			serviceLifecycle = lifecycle
+			tasks := stopper.NewStopper("dedicated-python-worker-test")
+			t.Cleanup(tasks.Stop)
+			require.NoError(t, startManagedPythonWorker(tc.cfg, tasks, lifecycle))
+
+			shutdownC := make(chan struct{})
+			done := make(chan struct{})
+			var shutdownErr error
+			go func() {
+				shutdownErr = waitSignalToStop(tasks, shutdownC)
+				close(done)
+			}()
+			t.Cleanup(func() {
+				close(shutdownC)
+				<-done
+			})
+			select {
+			case <-done:
+				require.ErrorContains(t, shutdownErr, tc.want)
+			case <-time.After(5 * time.Second):
+				t.Fatal("dedicated Python worker failure did not wake shutdown")
+			}
+		})
+	}
 }
 
 func TestServiceSupervisorKeepsPythonProviderUntilCNDrains(t *testing.T) {

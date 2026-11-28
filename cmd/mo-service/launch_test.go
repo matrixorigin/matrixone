@@ -713,6 +713,36 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 	}
 }
 
+func TestLaunchSkipsReleasedPythonServerRole(t *testing.T) {
+	setLaunchTestHooks(t)
+	// v4.2.6, etc/launch-with-python-udf-server/python-udf-server.toml.
+	const legacy = `service-type = "PYTHON_UDF"
+
+[python-udf-server]
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41b2"
+address = "127.0.0.1:50051"
+path = "pkg/udf/pythonservice/pyserver"
+`
+	file := writeLaunchTestFile(t, "python-udf-server.toml", legacy)
+	serviceLifecycle = newServiceSupervisor()
+	launchStartService = startService
+	require.NoError(t, startPythonUdfServiceCluster(t.Context(), []string{file}, nil, nil))
+	serviceLifecycle.pythonWorkerRequired = true
+	dedicated := NewConfig()
+	require.NoError(t, parseConfigFromFile(file, dedicated))
+	require.ErrorContains(t, startService(t.Context(), dedicated, nil, nil), "use [python-udf-worker]")
+
+	// An explicit replacement block takes precedence in a migrated file.
+	cfg := NewConfig()
+	require.NoError(t, parseFromString(legacy+`
+[python-udf-worker]
+address = "127.0.0.1:50052"
+path = "pkg/udf/python/worker"
+`, cfg))
+	require.False(t, cfg.legacyPythonUdfServer)
+	require.Equal(t, "127.0.0.1:50052", cfg.PythonUdfWorkerConfig.Address)
+}
+
 func TestLaunchRejectsMisclassifiedServiceConfigs(t *testing.T) {
 	setLaunchTestHooks(t)
 	started := make([]metadata.ServiceType, 0, 2)

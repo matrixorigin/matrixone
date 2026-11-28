@@ -16,6 +16,7 @@ package lockop
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -98,6 +99,7 @@ func TestFixedSnapshotNamespaceAdmission(t *testing.T) {
 				op.TxnRef().Isolation = txnpb.TxnIsolation_SI
 				snapshot := op.Txn().SnapshotTS
 				ls := proc.GetLockService()
+				var granted lock.Result
 				proc.Base.LockService = admissionLockService{LockService: ls, lockFn: func(ctx context.Context, table uint64, rows [][]byte, id []byte, opts lock.LockOptions) (lock.Result, error) {
 					require.True(t, opts.KeepRows)
 					require.Equal(t, lock.Granularity_Row, opts.Granularity)
@@ -118,6 +120,7 @@ func TestFixedSnapshotNamespaceAdmission(t *testing.T) {
 					case "missing_watermark":
 						result.Timestamp = timestamp.Timestamp{}
 					}
+					granted = result
 					return result, err
 				}}
 				result, err := LockRowsForFixedSnapshotAdmissionResult(proc.Ctx, nil, proc, 48, bat, 0,
@@ -133,6 +136,14 @@ func TestFixedSnapshotNamespaceAdmission(t *testing.T) {
 				default:
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
 					require.Empty(t, result, "failed admission cannot publish a grant")
+					require.ErrorContains(t, err, "catalog namespace snapshot is stale")
+					require.ErrorContains(t, err, "snapshot="+snapshot.DebugString())
+					require.ErrorContains(t, err, "grant="+snapshot.Next().DebugString())
+					require.ErrorContains(t, err, fmt.Sprintf("lock-service=%q", granted.LockedOn.ServiceID))
+					require.ErrorContains(t, err, fmt.Sprintf("binding-version=%d", granted.LockedOn.Version))
+					require.ErrorContains(t, err, fmt.Sprintf("group=%d", granted.LockedOn.Group))
+					require.ErrorContains(t, err, fmt.Sprintf("has-conflict=%t", outcome == "waited_newer"))
+					require.ErrorContains(t, err, fmt.Sprintf("has-prev-commit=%t", outcome == "waited_newer"))
 				}
 				require.Equal(t, snapshot, op.Txn().SnapshotTS)
 				require.Equal(t, 1, waiter.calls, "SI admission must never call the snapshot waiter")

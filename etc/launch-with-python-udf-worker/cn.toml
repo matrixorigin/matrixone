@@ -1,0 +1,29 @@
+service-type = "CN"
+data-dir = "./mo-data"
+
+# Opt into the checksum-free DISK-V2 backend. The cluster-wide default remains
+# DISK (CRC-framed) for backward compatibility with existing data dirs; this
+# config explicitly selects DISK-V2 for a fresh deployment.
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK-V2"
+data-dir = "./mo-data/local2"
+
+[[fileservice]]
+name = "SHARED"
+backend = "DISK-V2"
+data-dir = "./mo-data/shared2"
+
+[log]
+level = "info"
+
+[cn]
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+port-base = 18000
+
+[cn.python-udf-client]
+enabled = true
+allow-unisolated = true
+server-address = "127.0.0.1:50051"
+max-invocation-rows = 1048576
+max-invocation-result-bytes = 268435456

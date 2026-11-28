@@ -65,6 +65,10 @@ type serviceRoleState struct {
 type serviceSupervisor struct {
 	roles [serviceRoleCount]serviceRoleState
 
+	// Set before any role starts. A Python-only process must exit on worker
+	// failure so its process supervisor can restart it.
+	pythonWorkerRequired bool
+
 	shutdownOnce       sync.Once
 	shutdownErr        error
 	dynamicCleanupOnce sync.Once
