@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -263,6 +264,16 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 }
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
+	if vec.Type.Id == int32(types.T_enum) {
+		if err := types.ValidateEnumEncoding(vec.Type.EnumEncoding); err != nil {
+			return nil, err
+		}
+		if err := types.ValidateEnumCollation(vec.Type.EnumCollation); err != nil {
+			return nil, err
+		}
+	} else if vec.Type.EnumCollation != 0 {
+		return nil, moerr.NewInvalidInputNoCtx("ENUM collation on non-ENUM vector")
+	}
 	rvec := NewVecFromReuse()
 	rvec.area = vec.Area
 	rvec.length = int(vec.Len)
@@ -288,13 +299,14 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 func TypeToProtoType(typ types.Type) plan.Type {
 	return plan.Type{
 		Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale,
-		EnumEncoding: typ.GetEnumEncoding(),
+		EnumEncoding: typ.GetEnumEncoding(), EnumCollation: typ.GetEnumCollation(),
 	}
 }
 
 func ProtoTypeToType(typ plan.Type) types.Type {
 	t := types.New(types.T(typ.Id), typ.Width, typ.Scale)
 	t.SetEnumEncoding(typ.EnumEncoding)
+	t.SetEnumCollation(typ.EnumCollation)
 	return t
 }
 

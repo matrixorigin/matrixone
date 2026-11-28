@@ -463,6 +463,9 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		n += int64(types.TSize)
 		def.Type = types.DecodeType(colBuf)
 		if def.Type.Oid == types.T_enum {
+			if err = types.ValidateEnumCollation(def.Type.GetEnumCollation()); err != nil {
+				return
+			}
 			if err = types.ValidateEnumEncoding(def.Type.GetEnumEncoding()); err != nil {
 				return
 			}
@@ -602,6 +605,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	}
 	for _, def := range s.ColDefs {
 		if def.Type.Oid == types.T_enum {
+			if err = types.ValidateEnumCollation(def.Type.GetEnumCollation()); err != nil {
+				return
+			}
 			if err = types.ValidateEnumEncoding(def.Type.GetEnumEncoding()); err != nil {
 				return
 			}

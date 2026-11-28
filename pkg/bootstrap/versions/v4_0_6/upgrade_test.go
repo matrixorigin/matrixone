@@ -22,6 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -60,7 +62,36 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "4.0.6", meta.Version)
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
-	require.Equal(t, uint32(5), meta.VersionOffset)
+	require.Equal(t, uint32(6), meta.VersionOffset)
+}
+
+func TestUpgradeColumnCharsetViewIsIdempotent(t *testing.T) {
+	entry := upgradeColumnCharsetView()
+	definition := sysview.InformationSchemaColumnsDDL
+	var ddl []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "tbl.relname = 'columns'"):
+			res := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mpool.MustNewZero())
+			res.NewBatch()
+			executor.AppendStringRows(res, 0, []string{definition})
+			return res.GetResult(), nil
+		case sql == entry.PreSql:
+			ddl = append(ddl, sql)
+		case sql == entry.UpgSql:
+			ddl = append(ddl, sql)
+			definition = sql
+		default:
+			t.Fatalf("unexpected upgrade SQL %s", sql)
+		}
+		return executor.Result{}, nil
+	}, nil)
+
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Equal(t, []string{entry.PreSql, entry.UpgSql}, ddl)
+
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Len(t, ddl, 2, "the current definition must survive a retry without being recreated")
 }
 
 func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {

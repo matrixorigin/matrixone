@@ -36,6 +36,7 @@ func TestScalarProjectionLiftableSpecialDomains(t *testing.T) {
 	for _, typ := range []plan.Type{
 		{Id: int32(types.T_enum), Enumvalues: "a,b"},
 		{Id: int32(types.T_enum), Enumvalues: framed, EnumEncoding: encoding},
+		{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: types.EnumCollationUTF8Bin},
 		{Id: int32(types.T_uint64), Enumvalues: "x,y"},
 	} {
 		expr, err := makeMySQLSpecialNumericValue(context.Background(), display, &typ)
@@ -64,6 +65,7 @@ func TestScalarProjectionLiftableSpecialDomains(t *testing.T) {
 		{"overload arity", func(e *plan.Expr) { e.GetF().Func.Obj = function.EncodeOverloadID(function.CAST_VALUE_TO_INDEX, 1) }},
 		{"domain type", func(e *plan.Expr) { e.GetF().Args[0] = makePlan2Int64ConstExprWithType(1) }},
 		{"domain mismatch", func(e *plan.Expr) { e.GetF().Args[0].GetLit().Value = &plan.Literal_Sval{Sval: "b,a"} }},
+		{"collation mismatch", func(e *plan.Expr) { e.Typ.EnumCollation = types.EnumCollationUTF8Bin }},
 		{"literal source", func(e *plan.Expr) { e.GetF().Args[0].GetLit().Src = DeepCopyExpr(display) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

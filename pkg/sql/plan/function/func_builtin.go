@@ -790,6 +790,14 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
+			// The persisted COLUMNS view interprets selectors 2 and 3 as
+			// explicit ENUM collations. Legacy ENUM retains NULL metadata.
+			if id := typ.GetEnumCollation(); types.EnumCollationName(id) != "" {
+				if err := rs.Append(int64(id), false); err != nil {
+					return err
+				}
+				continue
+			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
 				typ.Oid == types.T_blob || typ.Oid == types.T_text || typ.Oid == types.T_datalink {
 				if err := rs.Append(int64(typ.Scale), false); err != nil {

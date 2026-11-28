@@ -34,6 +34,8 @@ message Type {
   string table = 6;
   string enumvalues = 7;
   uint32 enum_encoding = 8;
+  // ENUM member-assignment identity; zero retains legacy lookup.
+  uint32 enum_collation = 15;
 }
 
 message msgHeader {

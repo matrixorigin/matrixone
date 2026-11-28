@@ -793,6 +793,7 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 		oldTyp.GetWidth() == newTyp.GetWidth() &&
 		oldTyp.GetScale() == newTyp.GetScale() &&
 		oldTyp.GetTable() == newTyp.GetTable() &&
+		oldTyp.GetEnumCollation() == newTyp.GetEnumCollation() &&
 		types.EnumMembersEqual(oldTyp.GetEnumvalues(), oldTyp.GetEnumEncoding(), newTyp.GetEnumvalues(), newTyp.GetEnumEncoding())
 }
 

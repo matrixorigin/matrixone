@@ -924,6 +924,43 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
 	}
 
+	t.Run("RejectExplicitEnumBeforeSinkEffects", func(t *testing.T) {
+		opened := false
+		stub := gostub.Stub(&OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
+			opened = true
+			return nil, moerr.NewInternalErrorNoCtx("unexpected sink connection")
+		})
+		t.Cleanup(stub.Reset)
+
+		for _, tc := range []struct {
+			name      string
+			sinkType  string
+			collation uint32
+		}{
+			{"matrixone_binary", CDCSinkType_MO, types.EnumCollationUTF8Bin},
+			{"mysql_general_ci", CDCSinkType_MySQL, types.EnumCollationGeneralCI},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				info := &DbTableInfo{SourceDbName: "src", SourceTblName: "paused", IdChanged: true}
+				def := &plan.TableDef{Cols: []*plan.ColDef{{
+					Name: "e",
+					Typ:  plan.Type{Id: int32(types.T_enum), EnumCollation: tc.collation},
+				}}}
+				sinker, err := NewSinker(UriInfo{SinkTyp: tc.sinkType}, 1, "task-1", info,
+					nil, def, 0, 0, NewCdcActiveRoutine(), 1024, CDCDefaultSendSqlTimeout)
+				require.False(t, opened, "unsupported table opened a sink connection")
+				require.Nil(t, sinker)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.ErrorContains(t, err, "explicitly collated ENUM")
+				require.False(t, IsPauseOrCancelError(err.Error()))
+				require.True(t, info.IdChanged)
+				retryable, classified := ClassifyRetryableError(err)
+				require.True(t, classified)
+				require.False(t, retryable)
+			})
+		}
+	})
+
 	t.Run("SuccessPath", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)

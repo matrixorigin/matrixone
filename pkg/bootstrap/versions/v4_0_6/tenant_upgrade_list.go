@@ -38,7 +38,8 @@ func upgradeColumnCharsetView() versions.UpgradeEntry {
 		PreSql:    "DROP VIEW IF EXISTS information_schema.COLUMNS;",
 		UpgSql:    ddl,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
+			// The catalog stores the lowercase name of the system view.
+			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "columns")
 			return exists && definition == ddl, err
 		},
 	}

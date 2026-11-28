@@ -120,6 +120,9 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 			continue
 		}
 		if attrDef.Attr.Type.Oid == types.T_enum {
+			if err := types.ValidateEnumCollation(attrDef.Attr.Type.GetEnumCollation()); err != nil {
+				return nil, err
+			}
 			if _, err := types.DecodeEnumMembers(attrDef.Attr.EnumVlaues, attrDef.Attr.Type.GetEnumEncoding()); err != nil {
 				return nil, err
 			}

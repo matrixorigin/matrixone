@@ -567,6 +567,9 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 			if source == nil {
 				return "", moerr.NewInternalErrorNoCtxf("DATA BRANCH source column %q is unavailable", name)
 			}
+			if source.Typ.EnumCollation != colDef.Typ.EnumCollation {
+				return "", moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM collation differs from its source")
+			}
 			if equal, err := types.EqualEnumMembers(source.Typ.Enumvalues, source.Typ.EnumEncoding, colDef.Typ.Enumvalues, colDef.Typ.EnumEncoding); err != nil {
 				return "", err
 			} else if !equal {
@@ -743,7 +746,7 @@ func (output *diffOutputTable) insert(ctx context.Context, ses *Session, bh Back
 				return moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM ordinal is out of range")
 			}
 			row[position] = &tree.StoredEnumValue{
-				Ordinal: uint16(ordinal), EnumValues: domain.Enumvalues, EnumEncoding: domain.EnumEncoding,
+				Ordinal: uint16(ordinal), EnumValues: domain.Enumvalues, EnumEncoding: domain.EnumEncoding, EnumCollation: domain.EnumCollation,
 			}
 		}
 	}

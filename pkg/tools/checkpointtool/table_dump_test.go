@@ -2218,6 +2218,28 @@ func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
 	assert.Contains(t, ddl, "`c_set` SET('a','b','c')")
 }
 
+func TestCheckpointDDLPreservesEnumCollation(t *testing.T) {
+	values, encoding, err := types.EncodeEnumMembers([]string{"", "comma,value", "A", "a"})
+	require.NoError(t, err)
+	typ := types.T_enum.ToType()
+	typ.SetEnumEncoding(encoding)
+	typ.SetEnumCollation(types.EnumCollationUTF8Bin)
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+		Rows: [][]string{
+			moColumnsTestRow(t, "123", "t", "e", encodedSQLType(t, typ), "1", "0", "0",
+				catalog.SystemColAttr_EnumValues, values),
+		},
+	}
+	schema := cloneTableSchema(&TableSchema{TableName: "t", Columns: buildColumnsFromMoColumnsRows(view, 123)})
+	require.Len(t, schema.Columns, 1)
+	require.Contains(t, RenderCreateTableDDLFromSchema(schema),
+		"ENUM('','comma,value','A','a') CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+
+	schema.Columns[0].EnumCollation = 255
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
+}
+
 func TestRenderCreateTableDDLFromSchema_AutoIncrementSkipsDefaultNull(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "t_auto",
