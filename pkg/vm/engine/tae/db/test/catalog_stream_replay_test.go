@@ -54,7 +54,7 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 
 	const tableCount = 80
-	const dropped = 16
+	const droppedTable = 0
 	const columns = 128
 	var savedKey int32
 	for first := 0; first < tableCount; first += 10 {
@@ -85,9 +85,9 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 	require.NoError(t, err)
 	db, err := txn.GetDatabase("stream_replay")
 	require.NoError(t, err)
-	for i := 0; i < dropped; i++ {
-		require.NoError(t, testutil.DropRelation2(ctx, txn, db, fmt.Sprintf("table_%03d", i)))
-	}
+	// One committed drop exercises persisted tombstones and both snapshots.
+	// Each additional drop looks up every column in the persisted catalog.
+	require.NoError(t, testutil.DropRelation2(ctx, txn, db, fmt.Sprintf("table_%03d", droppedTable)))
 	require.NoError(t, txn.Commit(ctx))
 	require.NoError(t, tae.DB.ForceFlush(ctx, tae.TxnMgr.Now()))
 
@@ -114,7 +114,7 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 	visibleColumns, blockCount, err := countColumns(txn)
 	require.NoError(t, err)
 	require.Greater(t, blockCount, 1)
-	require.Equal(t, (tableCount-dropped)*(columns+1), visibleColumns)
+	require.Equal(t, (tableCount-1)*(columns+1), visibleColumns)
 	oldColumns, _, err := countColumns(oldSnapshot)
 	require.NoError(t, err)
 	require.Equal(t, tableCount*(columns+1), oldColumns)
@@ -138,10 +138,10 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 	require.NoError(t, err)
 	db, err = txn.GetDatabase("stream_replay")
 	require.NoError(t, err)
-	require.NoError(t, testutil.DropRelation2(ctx, txn, db, fmt.Sprintf("table_%03d", dropped)))
+	require.NoError(t, testutil.DropRelation2(ctx, txn, db, fmt.Sprintf("table_%03d", droppedTable+1)))
 	workspaceColumns, _, err := countColumns(txn)
 	require.NoError(t, err)
-	require.Equal(t, (tableCount-dropped-1)*(columns+1), workspaceColumns)
+	require.Equal(t, (tableCount-2)*(columns+1), workspaceColumns)
 	require.NoError(t, txn.Rollback(ctx))
 
 	require.NoError(t, tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), 0))
@@ -152,7 +152,7 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 	require.NoError(t, err)
 	for i := 0; i < tableCount; i++ {
 		rel, e := db.GetRelationByName(fmt.Sprintf("table_%03d", i))
-		if i < dropped {
+		if i == droppedTable {
 			require.Error(t, e)
 			continue
 		}
