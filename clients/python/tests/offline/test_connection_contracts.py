@@ -437,3 +437,146 @@ def test_create_table_execution_diagnostics_redact_password(monkeypatch):
     assert '***' in str(result.value)
     logged = client.logger.log_error.call_args.args[0]
     assert secret not in str(logged)
+
+
+# --- #32572 review: physical autocommit must not break logical transactions ---
+#
+# SQLite with ``isolation_level=None`` is a physical-autocommit DBAPI connection,
+# like PyMySQL/aiomysql with ``autocommit=True``: SQLAlchemy's logical begin
+# alone sends no server BEGIN, so a rollback cannot undo earlier writes.
+
+
+def _autocommit_sqlite_engine(path):
+    from sqlalchemy import create_engine as real_create_engine
+
+    return real_create_engine('sqlite:///%s' % path, connect_args={'isolation_level': None})
+
+
+def _connect_sync_autocommit_client(monkeypatch, tmp_path):
+    import matrixone.client as client_module
+
+    path = tmp_path / 'autocommit.db'
+    monkeypatch.setattr(client_module, 'create_engine', lambda url, **kwargs: _autocommit_sqlite_engine(path))
+    monkeypatch.setattr('matrixone._local_infile.configure_engine', lambda *args, **kwargs: None)
+    monkeypatch.setattr('matrixone.sqlalchemy_ext.dialect.adapt_engine_dialect', lambda engine: None)
+    client = Client(logger=Mock())
+    monkeypatch.setattr(client, '_detect_backend_version', lambda: None)
+    monkeypatch.setattr(client, '_initialize_managers', lambda: None)
+    client.connect(database='test', on_connect=[])
+    with client._engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE t (id INTEGER PRIMARY KEY)')
+    return client
+
+
+def _count(engine):
+    with engine.connect() as connection:
+        return connection.exec_driver_sql('SELECT COUNT(*) FROM t').scalar()
+
+
+def test_sync_autocommit_engine_begin_rolls_back_on_error(monkeypatch, tmp_path):
+    client = _connect_sync_autocommit_client(monkeypatch, tmp_path)
+    try:
+        with pytest.raises(RuntimeError):
+            with client.get_sqlalchemy_engine().begin() as connection:
+                connection.exec_driver_sql('INSERT INTO t VALUES (1)')
+                raise RuntimeError('abort')
+        assert _count(client._engine) == 0
+        with client.get_sqlalchemy_engine().begin() as connection:
+            connection.exec_driver_sql('INSERT INTO t VALUES (2)')
+        assert _count(client._engine) == 1
+    finally:
+        client.disconnect()
+
+
+def test_sync_session_write_after_manual_commit_rolls_back(monkeypatch, tmp_path):
+    from sqlalchemy import text
+
+    client = _connect_sync_autocommit_client(monkeypatch, tmp_path)
+    try:
+        with pytest.raises(RuntimeError):
+            with client.session() as session:
+                session.execute(text('INSERT INTO t VALUES (1)'))
+                session.commit()
+                session.execute(text('INSERT INTO t VALUES (2)'))
+                raise RuntimeError('abort')
+        with client._engine.connect() as connection:
+            rows = [row[0] for row in connection.exec_driver_sql('SELECT id FROM t ORDER BY id')]
+        assert rows == [1]
+    finally:
+        client.disconnect()
+
+
+def test_explicit_autocommit_isolation_keeps_statement_autocommit(monkeypatch, tmp_path):
+    client = _connect_sync_autocommit_client(monkeypatch, tmp_path)
+    try:
+        engine = client.get_sqlalchemy_engine().execution_options(isolation_level='AUTOCOMMIT')
+        with engine.connect() as connection:
+            connection.exec_driver_sql('INSERT INTO t VALUES (7)')
+        assert _count(client._engine) == 1
+    finally:
+        client.disconnect()
+
+
+def test_physical_autocommit_off_does_not_install_server_begin():
+    from sqlalchemy import create_engine as real_create_engine, event
+
+    from matrixone._connection_options import install_server_transaction_begin
+
+    engine = real_create_engine('sqlite://')
+    install_server_transaction_begin(engine, False)
+    assert not getattr(engine, '_matrixone_server_begin', False)
+
+
+@pytest.mark.asyncio
+async def test_async_autocommit_engine_begin_and_session_roll_back(monkeypatch, tmp_path):
+    pytest.importorskip('aiosqlite')
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine as real_create_async_engine
+
+    import matrixone.async_client as async_module
+
+    path = tmp_path / 'async_autocommit.db'
+    monkeypatch.setattr(
+        async_module,
+        'create_async_engine',
+        lambda url, **kwargs: real_create_async_engine(
+            'sqlite+aiosqlite:///%s' % path, connect_args={'isolation_level': None}
+        ),
+    )
+    monkeypatch.setattr('matrixone._local_infile.configure_engine', lambda *args, **kwargs: None)
+    monkeypatch.setattr('matrixone.sqlalchemy_ext.dialect.adapt_engine_dialect', lambda engine: None)
+    client = AsyncClient(logger=Mock())
+    monkeypatch.setattr(client, '_initialize_vector_managers', lambda: None)
+    await client.connect(database='test', on_connect=[])
+    try:
+        async with client._engine.begin() as connection:
+            await connection.exec_driver_sql('CREATE TABLE t (id INTEGER PRIMARY KEY)')
+        with pytest.raises(RuntimeError):
+            async with client._engine.begin() as connection:
+                await connection.exec_driver_sql('INSERT INTO t VALUES (1)')
+                raise RuntimeError('abort')
+        with pytest.raises(RuntimeError):
+            async with client.session() as session:
+                await session.execute(text('INSERT INTO t VALUES (2)'))
+                await session.commit()
+                await session.execute(text('INSERT INTO t VALUES (3)'))
+                raise RuntimeError('abort')
+        async with client._engine.connect() as connection:
+            rows = [row[0] for row in await connection.exec_driver_sql('SELECT id FROM t ORDER BY id')]
+        assert rows == [2]
+    finally:
+        await client.disconnect()
+
+
+def test_statement_autocommit_checkout_sends_no_server_begin(monkeypatch, tmp_path):
+    from matrixone._connection_options import STATEMENT_AUTOCOMMIT
+
+    client = _connect_sync_autocommit_client(monkeypatch, tmp_path)
+    try:
+        engine = client.get_sqlalchemy_engine().execution_options(**{STATEMENT_AUTOCOMMIT: True})
+        with engine.connect() as connection:
+            # Standalone DDL / MERGE / PICK keep the physical autocommit mode.
+            connection.exec_driver_sql('INSERT INTO t VALUES (5)')
+        assert _count(client._engine) == 1
+    finally:
+        client.disconnect()

@@ -39,6 +39,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from ._connection_options import STATEMENT_AUTOCOMMIT
 from ._telemetry import observe, pool_wait
 from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .restore import AsyncRestoreManager
@@ -701,8 +702,10 @@ class AsyncClient(BaseMatrixOneClient):
             query={"charset": self._connection_params["charset"]},
         )
 
+        from ._connection_options import install_server_transaction_begin
         from ._local_infile import connection_options, configure_engine
 
+        autocommit = self._connection_params.get('autocommit', self.auto_commit)
         # Create async engine with connection pooling
         engine = create_async_engine(
             url,
@@ -713,7 +716,7 @@ class AsyncClient(BaseMatrixOneClient):
             pool_pre_ping=True,  # Verify connections before use
             pool_reset_on_return="rollback",  # Never commit an abandoned borrower
             connect_args={
-                'autocommit': self._connection_params.get('autocommit', self.auto_commit),
+                'autocommit': autocommit,
                 'connect_timeout': self._connection_params['connect_timeout'],
                 **connection_options(self._connection_params.get('local_infile')),
             },
@@ -725,6 +728,7 @@ class AsyncClient(BaseMatrixOneClient):
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
         adapt_engine_dialect(engine.sync_engine)
+        install_server_transaction_begin(engine, autocommit)
 
         return engine
 
@@ -1279,6 +1283,9 @@ class AsyncClient(BaseMatrixOneClient):
                 restore_autocommit = False
                 prev_autocommit = None
                 if non_transactional:
+                    # Keep this checkout in server autocommit: no engine BEGIN hook.
+                    # (SQLAlchemy 2.x updates the connection in place.)
+                    conn.execution_options(**{STATEMENT_AUTOCOMMIT: True})
                     prev_autocommit = (await conn.exec_driver_sql("SELECT @@autocommit")).scalar()
                     if isinstance(prev_autocommit, bytes):
                         prev_autocommit = prev_autocommit.decode()
@@ -1604,6 +1611,7 @@ class AsyncClient(BaseMatrixOneClient):
         Directly constructed or wrapped sessions retain their caller's transaction
         ownership; use the client context for explicit server BEGIN and cleanup.
         """
+        from ._connection_options import server_begin_installed
         from .connection_hooks import assert_not_in_hook
 
         assert_not_in_hook(self)
@@ -1617,7 +1625,9 @@ class AsyncClient(BaseMatrixOneClient):
             await tx_wrapper.begin()
             pool_wait()
             connection = await tx_wrapper.connection()
-            await connection.exec_driver_sql('BEGIN')
+            # With physical autocommit the engine's begin hook already sent BEGIN.
+            if not server_begin_installed(self._engine):
+                await connection.exec_driver_sql('BEGIN')
             yield tx_wrapper
             await tx_wrapper.commit()
         except BaseException:
