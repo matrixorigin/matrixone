@@ -1384,6 +1384,39 @@ func TestCloneSQLUdfRemapsTableQueryTerm(t *testing.T) {
 	require.NotNil(t, stmts[0].(*tree.Select).Limit)
 }
 
+func TestCloneSQLUdfRemapsPerformQuery(t *testing.T) {
+	const sqlMode = "ANSI_QUOTES"
+	const sql = `perform select power("n_nationkey", 0.5) from "source_db"."nation" where "n_nationkey" = $1`
+	stored := function.EncodeSQLUdfBody(sql)
+
+	refs, status, err := collectCloneRoutineReferences(t.Context(), stored, "sql", sqlMode, "source_db", 1, true)
+	require.NoError(t, err)
+	require.Equal(t, cloneRoutineDependenciesInspected, status)
+	require.Len(t, refs.tables, 1)
+	require.Contains(t, refs.tables, cloneDatabaseObjectKey("source_db", "nation", 1))
+
+	rewritten, err := rewriteCloneSQLFunctionBody(t.Context(), stored, sqlMode, "source_db", "tpch", 1)
+	require.NoError(t, err)
+	text, legacy := function.DecodeUdfCatalogBody("sql", rewritten)
+	require.False(t, legacy)
+	require.Contains(t, text, "from `tpch`.`nation`")
+	require.Contains(t, text, "= $1")
+	stmts, scalar, query, err := function.ParseSQLUdfBody(t.Context(), text, 1, sqlMode)
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.True(t, query)
+	require.Nil(t, scalar)
+	require.True(t, stmts[0].(*tree.Select).IsPerform)
+
+	const scalarSQL = `perform."n_nationkey" + $1`
+	unchanged, err := rewriteCloneSQLFunctionBody(t.Context(), scalarSQL, sqlMode, "source_db", "tpch", 1)
+	require.NoError(t, err)
+	require.Equal(t, scalarSQL, unchanged)
+
+	_, err = rewriteCloneSQLFunctionBody(t.Context(), "perform select from", sqlMode, "source_db", "tpch", 1)
+	require.Error(t, err)
+}
+
 func TestCloneSQLUdfPreservesLiteralSemantics(t *testing.T) {
 	const expr = `concat(inet_ntoa(_binary 0x31), inet_ntoa(0x31), inet_ntoa(_binary '1'),
 		'a''b\\c', _binary '` + "\xff" + `\\', (select n_nationkey from "source_db"."nation" where n_nationkey = $1))`

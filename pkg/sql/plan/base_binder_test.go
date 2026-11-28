@@ -918,6 +918,8 @@ func TestSQLUDFBindsTableAndValuesQueryTerms(t *testing.T) {
 		{"parenthesized values left term", "(VALUES ROW($1) UNION ALL SELECT 2 WHERE 1=0)", false},
 		{"leading empty query", "; SELECT $1; SELECT 3;", false},
 		{"leading empty set query", "; (SELECT 1 WHERE 1=0) UNION ALL SELECT $1;", false},
+		{"PERFORM projection", "perform select $1", false},
+		{"PERFORM parenthesized set", "; perform (select 1 where 1=0) union all select $1; select 3", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := &powerUdfCompilerContext{
@@ -956,6 +958,23 @@ func TestSQLUDFBindsTableAndValuesQueryTerms(t *testing.T) {
 			require.True(t, foundParam, "the query term must retain the caller's prepared argument")
 		})
 	}
+}
+
+func TestBindSQLUDFPerformIdentifiers(t *testing.T) {
+	ctx := &powerUdfCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		bodies: map[string]function.Udf{
+			"bare_column":      {Body: "perform + $1"},
+			"qualified_column": {Body: "perform.perform + $1"},
+		},
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `select bare_column(2), qualified_column(3)
+		from (select n_nationkey as perform from nation) as perform`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, built.GetQuery())
 }
 
 func TestSQLUDFReportsInvalidBody(t *testing.T) {

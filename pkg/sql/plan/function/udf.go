@@ -80,8 +80,8 @@ func DecodeUdfCatalogBody(language, body string) (string, bool) {
 // A standalone query owns its set operators and outer clauses. A parenthesized
 // subquery can also be part of a larger expression, so only the parser can
 // decide whether leading parentheses start a complete query. queryBody remains
-// true on errors following an explicit SELECT, WITH, or TABLE. The caller
-// owns statements on success. A non-nil scalar borrows the first statement's AST.
+// true on errors following an unambiguous query prefix. The caller owns
+// statements on success. A non-nil scalar borrows the first statement's AST.
 func ParseSQLUdfBody(ctx context.Context, body string, lowerCaseTableNames int64, sqlMode string) (
 	statements []tree.Statement, scalar tree.Expr, queryBody bool, err error,
 ) {
@@ -91,16 +91,25 @@ func ParseSQLUdfBody(ctx context.Context, body string, lowerCaseTableNames int64
 		// The statement parser discards leading empty statements.
 		token, _ = scanner.Scan()
 	}
-	mysql.PutScanner(scanner)
 	// The MySQL SELECT entry points include TABLE, which the parser lowers
 	// to SELECT. Top-level VALUES produces a different statement type, while
 	// VALUES(column) can be a scalar expression.
 	explicitQuery := token == mysql.SELECT || token == mysql.WITH || token == mysql.TABLE
-	if explicitQuery || token == '(' {
+	tryQuery := token == '('
+	if token == mysql.PERFORM {
+		// PERFORM is also an identifier. SELECT and WITH unambiguously start
+		// its query production. A parenthesized term requires the parser to
+		// determine whether it is part of a complete set operation.
+		next, _ := scanner.Scan()
+		explicitQuery = next == mysql.SELECT || next == mysql.WITH
+		tryQuery = next == '('
+	}
+	mysql.PutScanner(scanner)
+	if explicitQuery || tryQuery {
 		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, body, lowerCaseTableNames, sqlMode)
 		if err == nil {
 			if selectStmt := firstSQLUdfSelect(statements); selectStmt != nil {
-				if !explicitQuery {
+				if token == '(' {
 					if subquery := sqlUdfParenthesizedScalar(selectStmt); subquery != nil {
 						return statements, subquery, false, nil
 					}

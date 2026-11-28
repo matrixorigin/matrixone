@@ -67,6 +67,45 @@ func TestParseSQLUdfBody(t *testing.T) {
 	}
 }
 
+func TestParseSQLUdfPerformBody(t *testing.T) {
+	const mode = "ANSI_QUOTES"
+	for _, tc := range []struct {
+		name, sql string
+		query     bool
+		wantType  any
+	}{
+		{"projection", "perform select $1", true, &tree.SelectClause{}},
+		{"CTE", "PERFORM WITH q AS (SELECT $1 AS x) SELECT x FROM q", true, &tree.SelectClause{}},
+		{"parenthesized set", "perform (select 1 where 1=0) union all select $1", true, &tree.UnionClause{}},
+		{"leading empty and trailing statement", "; /* comment */ ; perform select $1; select 3;", true, &tree.SelectClause{}},
+		{"column", "perform + $1", false, &tree.BinaryExpr{}},
+		{"qualified column", `perform."x"`, false, &tree.UnresolvedName{}},
+		{"quoted column", `"perform"`, false, &tree.UnresolvedName{}},
+		{"scalar with function call", "perform + abs($1)", false, &tree.BinaryExpr{}},
+		{"ordinary SQL function call", "some_fn($1)", false, &tree.FuncExpr{}},
+		{"identifier before query", "perform; perform select 7;", false, &tree.UnresolvedName{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, scalar, query, err := ParseSQLUdfBody(t.Context(), tc.sql, 1, mode)
+			require.NoError(t, err)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.Equal(t, tc.query, query)
+			outer := stmts[0].(*tree.Select)
+			require.Equal(t, tc.query, outer.IsPerform)
+			if query {
+				require.Nil(t, scalar)
+				require.IsType(t, tc.wantType, outer.Select)
+			} else {
+				require.IsType(t, tc.wantType, scalar)
+			}
+		})
+	}
+}
+
 func TestParseSQLUdfBodyRejectsInvalidBody(t *testing.T) {
 	for _, tc := range []struct {
 		sql           string
@@ -78,6 +117,9 @@ func TestParseSQLUdfBodyRejectsInvalidBody(t *testing.T) {
 		{"(1 + )", false},
 		{"(select 1) union all", false},
 		{"select from", true},
+		{"perform select from", true},
+		{"perform with", true},
+		{"perform($1)", false},
 		{"values row(1)", false},
 		{"values row(1) union all select 2", false},
 	} {
