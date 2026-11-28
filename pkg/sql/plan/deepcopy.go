@@ -916,6 +916,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		LocalRuntimeFilterDomains: domains,
 		IntegerPrecision:          cloneIntegerPrecisionGraph(qry.IntegerPrecision),
 		ExecutionDependentAccess:  qry.ExecutionDependentAccess,
+		HasTableRewrite:           qry.HasTableRewrite,
 		StmtType:                  qry.StmtType,
 		Steps:                     slices.Clone(qry.Steps),
 		Nodes:                     make([]*plan.Node, len(qry.Nodes)),

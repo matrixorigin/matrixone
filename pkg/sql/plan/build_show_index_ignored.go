@@ -55,6 +55,10 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	// Ignored-entry rows include physical primary keys.
+	if len(rewriteChainForTable(ctx, stmt.RewriteOption, dbName, tblName)) != 0 {
+		return nil, rewritePrivilegeError(ctx.GetContext())
+	}
 
 	defs, _, err := tableWithPartitions(ctx, dbName, tableDef)
 	if err != nil {
@@ -89,7 +93,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, err
 	}
 	defer newStmt.Free()
-	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef)
+	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef, stmt.RewriteOption)
 }
 
 // ignoredPkSql returns the primary key of an ignored row of tableDef as text: a composite key,

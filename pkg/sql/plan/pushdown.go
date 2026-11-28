@@ -519,7 +519,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			return originalNodeID, cantPushdown
 		}
 		if node.FilterIsBarrier {
-			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+			var safeFilters []*plan.Expr
+			if _, safePolicy := builder.dmlRewriteFilters[nodeID]; safePolicy {
+				preparedDiagnosticsFree := builder.preparedParameterDiagnosticsFree()
+				for _, filter := range filters {
+					if dmlRewritePredicateIsTotal(filter, preparedDiagnosticsFree) {
+						safeFilters = append(safeFilters, filter)
+					} else {
+						cantPushdown = append(cantPushdown, filter)
+					}
+				}
+			} else {
+				cantPushdown = append(cantPushdown, filters...)
+			}
+			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], safeFilters, separateNonEquiConds)
 			if len(cantPushdownChild) > 0 {
 				childID = builder.appendNode(&plan.Node{
 					NodeType:   plan.Node_FILTER,
@@ -528,7 +541,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}, nil)
 			}
 			node.Children[0] = childID
-			cantPushdown = append(cantPushdown, filters...)
 			return originalNodeID, cantPushdown
 		}
 		canPushdown = filters

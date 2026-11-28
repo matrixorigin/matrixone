@@ -438,6 +438,9 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 		ctx.bindingByCol[col] = binding
 	}
 	ctx.bindingTree = &BindingTreeNode{binding: binding}
+	if source := parent.bindingByTable[alias]; source != nil && source.dmlStorageColumns != nil {
+		ctx.restrictDMLBinding(binding, source.colIdByName)
+	}
 	havingBinder := NewHavingBinder(builder, ctx)
 	binder := NewProjectionBinder(builder, ctx, havingBinder)
 	ctx.binder = binder
@@ -471,6 +474,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		}
 	}
 	if err = validateRepeatedPhysicalTargetPrimaryKeyUpdate(builder.GetContext(), dmlCtx); err != nil {
+		return 0, err
+	}
+	if err = builder.enableDMLTargetRewrites(bindCtx, dmlCtx.updateRewrites, dmlCtx.updateCol2Expr); err != nil {
 		return 0, err
 	}
 	if stmt.HasReturning() {
@@ -521,6 +527,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		for _, col := range tableDef.Cols {
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			bindCtx.markDMLPhysicalRef(e)
 			if isEnumOrSetPlanType(&col.Typ) {
 				// DML row images keep the storage ordinal/bitmap, including
 				// ENUM members that share an empty display string.
@@ -649,6 +656,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			newColName2Idx[alias+"."+colName] = oldPos
 			oldColName2Idx[alias+"."+colName] = int32(len(selectList))
 			oldColumn := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(colName, 1))
+			bindCtx.markDMLPhysicalRef(oldColumn)
 			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; isEnumOrSetPlanType(&typ) {
 				bindCtx.physicalMySQLSpecialRefs[oldColumn] = struct{}{}
 			}
@@ -683,9 +691,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			},
 			Where: stmt.Where,
 		},
-		OrderBy: stmt.OrderBy,
-		Limit:   stmt.Limit,
-		With:    stmt.With,
+		OrderBy:       stmt.OrderBy,
+		Limit:         stmt.Limit,
+		With:          stmt.With,
+		RewriteOption: stmt.RewriteOption,
 	}
 	bindCtx.numericProjectionTypes = make([]Type, len(selectList))
 	for pos, typ := range updateNumericTargets {
@@ -2729,7 +2738,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		}
 		return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
 	})
-	if !builder.hasExistingLockTargets() &&
+	if len(builder.dmlRewriteTargets) == 0 && !builder.hasExistingLockTargets() &&
 		isUnrestrictedSingleTargetUpdate(stmt, dmlCtx, updatedTargetCount) &&
 		lockTargetsCoverCompleteKeyspaces(lockTargets) {
 		if builder.fullTableUpdateLockTargets == nil {
@@ -5895,6 +5904,9 @@ func validateUpdateAssignmentTargets(builder *QueryBuilder, bindCtx *BindContext
 				return err
 			}
 
+			if target := dmlCtx.updateRewrites[binding.table]; target != nil && target.visible == nil {
+				return rewritePrivilegeError(builder.GetContext())
+			}
 			idx, writable := dmlCtx.aliasMap[binding.table]
 			if !writable || binding.tableID != dmlCtx.tableDefs[idx].TblId {
 				return moerr.NewInvalidInputf(builder.GetContext(), "UPDATE target table '%s' is not updatable", binding.table)
@@ -5906,8 +5918,8 @@ func validateUpdateAssignmentTargets(builder *QueryBuilder, bindCtx *BindContext
 
 // Use the existing source identity owner for SET, never SELECT projection aliases.
 func resolveUpdateAssignmentTarget(ctx context.Context, bindCtx *BindContext, lhs *tree.UnresolvedName) (*Binding, error) {
-	binding, _, ok := resolveColumnIdentity(bindCtx, lhs)
-	if !ok {
+	binding, pos, ok := resolveColumnIdentity(bindCtx, lhs)
+	if !ok || pos == NotFound {
 		if lhs.TblName() == "" {
 			if value, found := bindCtx.bindingByCol[lhs.ColName()]; found && value == nil {
 				return nil, moerr.NewInvalidInputf(ctx, "ambiguous column reference '%s'", lhs.ColNameOrigin())

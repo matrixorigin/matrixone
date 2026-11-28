@@ -63,6 +63,11 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	// Index job status includes counts and errors from physical rows.
+	if len(rewriteChainForTable(ctx, stmt.RewriteOption, dbName, tblName)) != 0 {
+		return nil, rewritePrivilegeError(ctx.GetContext())
+	}
+
 	defs, names, err := tableWithPartitions(ctx, dbName, tableDef)
 	if err != nil {
 		return nil, err
@@ -81,7 +86,7 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 	defer newStmt.Free()
-	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef)
+	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef, stmt.RewriteOption)
 }
 
 // showIndexStatusSql returns the rows of SHOW INDEX STATUS of the indexes of the tables defs of

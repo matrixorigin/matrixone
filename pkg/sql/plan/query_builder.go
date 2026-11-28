@@ -13985,6 +13985,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			lower := builder.compCtx.GetLowerCaseTableNames()
 			key := rewriteTableKey(schema, table, lower)
 			if chain := ctx.remapOption.Rewrites[key]; len(chain) > 0 {
+				builder.qry.HasTableRewrite = true
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that
 				// layer's body resolves to the next inner layer (the chain minus
@@ -14471,7 +14472,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, "", moerr.NewDerivedMustHaveAlias(builder.GetContext())
 		}
 		targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, string(tbl.As.Alias))]
-		if tf, ok := tbl.Expr.(*tree.TableFunction); ok && tf.Id() == moChangedTablesName {
+		writePolicy := builder.dmlRewriteTarget(tbl.Expr)
+		if writePolicy != nil {
+			// Resolve the physical write target once. Its policy is applied to
+			// that scan below, after ordinary source admission and binding.
+			rewrite := ctx.remapOption
+			ctx.remapOption = nil
+			nodeID, sqlDatabase, err = builder.buildTable(tbl.Expr, ctx, tableInput)
+			ctx.remapOption = rewrite
+		} else if tf, ok := tbl.Expr.(*tree.TableFunction); ok && tf.Id() == moChangedTablesName {
 			// Build the scan directly so only the explicit alias is bound.
 			nodeID, err = builder.buildTableFunction(tf, ctx, tableInput)
 		} else if derivedSelect != nil && len(targets) > 0 {
@@ -14582,6 +14591,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					return 0, "", err
 				}
 			}
+		}
+		if writePolicy != nil {
+			nodeID, err = builder.applyDMLTargetRewrite(nodeID, midNode, ctx, writePolicy)
 		}
 		return
 	case *tree.StatementSource:

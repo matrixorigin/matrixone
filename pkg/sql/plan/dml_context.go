@@ -62,6 +62,7 @@ type DMLContext struct {
 	// tables and CTEs.
 	hasReadOnlySource bool
 
+	updateRewrites map[string]*dmlTargetRewrite
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	// updateTargetOrder records writable targets in the table-list binding order.
 	// MySQL evaluates repeated physical targets in this order, independently of
@@ -98,18 +99,22 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		return classifyUpdateTableResolutionError(ctx, stmt, err)
 	}
 
-	// check update field and set updateKeys
+	dmlCtx.updateRewrites = resolveDMLTargetRewrites(ctx, stmt.RewriteOption, stmt.Tables, stmt.With, dmlCtx.aliasMap, dmlCtx.tableDefs)
+
 	usedTbl := make(map[string]map[string]tree.Expr)
 	updateColOrder := make(map[string][]string)
 	updateAssignments := make(map[string][]UpdateAssignment)
-	allColumns := make(map[string]map[string]bool)
-	for alias, idx := range dmlCtx.aliasMap {
-		allColumns[alias] = make(map[string]bool)
-		for _, col := range dmlCtx.tableDefs[idx].Cols {
-			if !col.Hidden {
-				allColumns[alias][col.Name] = true
-			}
+
+	// Identify provisional write targets from their visible schemas. The FROM
+	// binder checks SET against the exposed columns of all sources.
+	writableColumn := func(alias string, idx int, name string) (writable, found bool) {
+		if target := dmlCtx.updateRewrites[alias]; target != nil {
+			_, found = target.visible[name]
+			return target.visible != nil, found
 		}
+		def := dmlCtx.tableDefs[idx]
+		pos, ok := def.Name2ColIndex[name]
+		return true, ok && !def.Cols[pos].Hidden
 	}
 
 	appendToTbl := func(table, column string, expr tree.Expr) {
@@ -129,44 +134,56 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		}
 
 		parts := updateExpr.Names[0]
+		colName := parts.ColName()
 		expr := updateExpr.Expr
 		if parts.NumParts > 1 {
-			colName := parts.ColName()
 			tblName := parts.TblName()
-			if _, tblExists := dmlCtx.aliasMap[tblName]; tblExists {
-				if allColumns[tblName][colName] {
-					appendToTbl(tblName, colName, expr)
-				} else {
-					return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
-				}
-			} else {
+			idx, exists := dmlCtx.aliasMap[tblName]
+			if !exists {
 				return moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
 			}
-		} else {
-			colName := parts.ColName()
-			found := false
-			for alias, columns := range allColumns {
-				if columns[colName] {
-					if found {
-						return moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
-					}
-					found = true
-					appendToTbl(alias, colName, expr)
-				}
+			writable, found := writableColumn(tblName, idx, colName)
+			if !writable {
+				return rewritePrivilegeError(ctx.GetContext())
 			}
-			if !found && stmt.With != nil {
-				var str string
-				for i, c := range stmt.With.CTEs {
-					if i > 0 {
-						str += ", "
-					}
-					str += string(c.Name.Alias)
-				}
-				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
-			} else if !found {
-				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table", parts.ColNameOrigin())
+			if !found {
+				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 			}
+			appendToTbl(tblName, colName, expr)
+			continue
 		}
+
+		found := false
+		hasWritableTarget := false
+		for alias, idx := range dmlCtx.aliasMap {
+			writable, hasColumn := writableColumn(alias, idx, colName)
+			hasWritableTarget = hasWritableTarget || writable
+			if !hasColumn {
+				continue
+			}
+			if found {
+				return moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
+			}
+			found = true
+			appendToTbl(alias, colName, expr)
+		}
+		if found {
+			continue
+		}
+		if !hasWritableTarget && len(dmlCtx.updateRewrites) != 0 {
+			return rewritePrivilegeError(ctx.GetContext())
+		}
+		if stmt.With != nil {
+			var str string
+			for i, c := range stmt.With.CTEs {
+				if i > 0 {
+					str += ", "
+				}
+				str += string(c.Name.Alias)
+			}
+			return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
+		}
+		return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table", parts.ColNameOrigin())
 	}
 
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))

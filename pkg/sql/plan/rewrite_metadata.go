@@ -30,21 +30,29 @@ func rewriteTableKey(database, table string, lower int64) string {
 	return tree.NewCStr(database, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 }
 
-// SHOW COLUMNS and SHOW CREATE TABLE expose physical metadata, including
-// expressions and constraints. Only a proven all-column chain can expose it.
+func rewriteChainForTable(ctx CompilerContext, option *tree.RewriteOption, database, table string) []*tree.Rewrite {
+	if option == nil || len(option.Rewrites) == 0 {
+		return nil
+	}
+	return option.Rewrites[rewriteTableKey(database, table, ctx.GetLowerCaseTableNames())]
+}
+
+func rewritePrivilegeError(ctx context.Context) error {
+	return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+}
+
+// Physical SHOW output can include expressions and constraints. Require a
+// proven all-column chain before exposing it.
 func checkShowRewriteMetadata(
 	ctx CompilerContext, option *tree.RewriteOption, database, table string,
 	def *TableDef, currentLocal bool,
 ) error {
-	if option == nil || len(option.Rewrites) == 0 {
-		return nil
-	}
-	lower := ctx.GetLowerCaseTableNames()
-	chain := option.Rewrites[rewriteTableKey(database, table, lower)]
+	chain := rewriteChainForTable(ctx, option, database, table)
 	if len(chain) == 0 {
 		return nil
 	}
 	if currentLocal && !def.IsTemporary && def.TableType == catalog.SystemOrdinaryRel {
+		lower := ctx.GetLowerCaseTableNames()
 		for _, rewrite := range chain {
 			if rewrite != nil {
 				_, all, supported := rewriteVisibleColumns(rewrite.Stmt, database, table, lower)
@@ -52,25 +60,23 @@ func checkShowRewriteMetadata(
 					continue
 				}
 			}
-			return moerr.NewInternalError(ctx.GetContext(), "do not have privilege to execute the statement")
+			return rewritePrivilegeError(ctx.GetContext())
 		}
 		return nil
 	}
-	return moerr.NewInternalError(ctx.GetContext(), "do not have privilege to execute the statement")
+	return rewritePrivilegeError(ctx.GetContext())
 }
 
-// applyRewriteMetadataVisibility keeps information_schema.COLUMNS consistent
-// with the projection exposed by an active row-column rewrite.  The catalog
-// view is expanded before this hook runs, so filtering its final output keeps
-// the existing object-visibility predicates and works for every COLUMNS view
-// implementation (including UNION and subscription variants).
+// Apply the same column visibility to catalog column and index-part rows.
+// At the view boundary, ordinary catalog grants and subscription scope have
+// already been bound. A functional index part has a NULL column name and
+// cannot satisfy a restricted projection.
 func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 	nodeID int32, ctx *BindContext, schema, table string,
 ) (int32, error) {
-	if ctx == nil || ctx.remapOption == nil ||
+	if ctx == nil || ctx.remapOption == nil || len(ctx.remapOption.Rewrites) == 0 ||
 		!strings.EqualFold(schema, INFORMATION_SCHEMA) ||
-		!strings.EqualFold(table, informationSchemaColumnsTable) ||
-		len(ctx.remapOption.Rewrites) == 0 {
+		(!strings.EqualFold(table, informationSchemaColumnsTable) && !strings.EqualFold(table, informationSchemaStatistics)) {
 		return nodeID, nil
 	}
 
@@ -86,7 +92,7 @@ func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 		}
 	}
 	if schemaPos < 0 || tablePos < 0 || columnPos < 0 {
-		return nodeID, nil
+		return nodeID, rewritePrivilegeError(builder.GetContext())
 	}
 
 	// Rewrite lookup uses the caller mode, which may differ from the stored
@@ -103,7 +109,11 @@ func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 		}
 		policy := rewriteMetadataPolicy{database: db, table: tableName, all: true}
 		for _, rewrite := range chain {
-			names, all, supported := rewriteVisibleColumns(rewrite.Stmt, db, tableName, lower)
+			var stmt tree.Statement
+			if rewrite != nil {
+				stmt = rewrite.Stmt
+			}
+			names, all, supported := rewriteVisibleColumns(stmt, db, tableName, lower)
 			if !supported {
 				policy.all = false
 				policy.names = nil
@@ -144,10 +154,14 @@ func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 	tag := ctx.rootTag()
 	schemaExpr := GetColExpr(rewriteMetadataOutputType(ctx, schemaPos), tag, int32(schemaPos))
 	tableExpr := GetColExpr(rewriteMetadataOutputType(ctx, tablePos), tag, int32(tablePos))
-	columnExpr := GetColExpr(rewriteMetadataOutputType(ctx, columnPos), tag, int32(columnPos))
+	columnExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "lower", []*planpb.Expr{
+		GetColExpr(rewriteMetadataOutputType(ctx, columnPos), tag, int32(columnPos)),
+	})
+	if err != nil {
+		return nodeID, err
+	}
 
 	if lower != 0 {
-		var err error
 		schemaExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "lower", []*planpb.Expr{schemaExpr})
 		if err != nil {
 			return nodeID, err
@@ -200,6 +214,7 @@ func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 	if err != nil {
 		return nodeID, err
 	}
+	builder.qry.HasTableRewrite = true
 	return builder.appendNode(&planpb.Node{
 		NodeType:     planpb.Node_FILTER,
 		Children:     []int32{nodeID},
@@ -245,7 +260,7 @@ func rewriteTargetName(key string, rewrite *tree.Rewrite) (string, string) {
 		return rewrite.DbName, rewrite.TableName
 	}
 	parts := strings.SplitN(key, ".", 2)
-	if len(parts) != 2 || rewrite == nil {
+	if len(parts) != 2 {
 		return "", ""
 	}
 	return parts[0], parts[1]
@@ -265,47 +280,65 @@ func intersectRewriteColumnNames(left, right map[string]struct{}) map[string]str
 }
 
 func rewriteVisibleColumns(stmt tree.Statement, database, table string, lower int64) (map[string]struct{}, bool, bool) {
-	var selectStmt tree.SelectStatement
-	switch statement := stmt.(type) {
-	case *tree.Select:
-		if statement.With != nil || statement.RewriteOption != nil || statement.TimeWindow != nil || statement.RankOption != nil {
-			return nil, false, false
-		}
-		selectStmt = statement.Select
-	case *tree.ParenSelect:
-		selectStmt = statement.Select
-	default:
+	clause := rewriteSelectClause(stmt, false)
+	if clause == nil {
 		return nil, false, false
 	}
-	for {
-		switch statement := selectStmt.(type) {
-		case *tree.ParenSelect:
-			selectStmt = statement.Select
-		case *tree.Select:
-			if statement.With != nil || statement.RewriteOption != nil || statement.TimeWindow != nil || statement.RankOption != nil {
-				return nil, false, false
-			}
-			selectStmt = statement.Select
-		default:
-			goto projection
-		}
-	}
-
-projection:
-	clause, ok := selectStmt.(*tree.SelectClause)
-	if !ok || clause.GroupBy != nil || clause.Having != nil || len(clause.Windows) != 0 || len(clause.Exprs) == 0 {
-		return nil, false, false
-	}
-	qualifier, aliased, ok := rewriteMetadataSingleTableSource(clause, database, table, lower)
+	qualifier, aliased, ok := rewriteSingleTableSource(clause, database, table, "", lower)
 	if !ok {
 		return nil, false, false
 	}
+	names, all, ok := rewriteProjectionColumns(clause.Exprs, database, qualifier, aliased, lower)
+	if !ok || all {
+		return nil, all, ok
+	}
+	visible := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		visible[name] = struct{}{}
+	}
+	return visible, false, true
+}
+
+// Parentheses preserve a projection. For writable rules also prove that
+// every SELECT wrapper and the innermost clause preserve base-row identity.
+func rewriteSelectClause(stmt tree.Statement, writable bool) *tree.SelectClause {
+	for {
+		switch s := stmt.(type) {
+		case *tree.ParenSelect:
+			if s == nil {
+				return nil
+			}
+			stmt = s.Select
+		case *tree.Select:
+			if s == nil || s.With != nil || s.RewriteOption != nil || s.TimeWindow != nil || s.RankOption != nil {
+				return nil
+			}
+			if writable && (s.IsPerform || len(s.OrderBy) != 0 || s.Limit != nil ||
+				s.Ep != nil || len(s.IntoVars) != 0 || s.SelectLockInfo != nil) {
+				return nil
+			}
+			stmt = s.Select
+		case *tree.SelectClause:
+			if s == nil || s.GroupBy != nil || s.Having != nil || len(s.Windows) != 0 || len(s.Exprs) == 0 {
+				return nil
+			}
+			if writable && (s.Distinct || s.Option&^tree.QuerySpecOptionAll != 0 || len(s.IntoVars) != 0 || s.IntoExport != nil) {
+				return nil
+			}
+			return s
+		default:
+			return nil
+		}
+	}
+}
+
+func rewriteProjectionColumns(exprs tree.SelectExprs, database, qualifier string, aliased bool, lower int64) ([]string, bool, bool) {
 	matches := func(value, expected string) bool {
 		return tree.NewCStr(value, lower).Compare() == tree.NewCStr(expected, lower).Compare()
 	}
-	names := make(map[string]struct{}, len(clause.Exprs))
+	var names []string
 	all := false
-	for _, expr := range clause.Exprs {
+	for _, expr := range exprs {
 		switch value := expr.Expr.(type) {
 		case tree.UnqualifiedStar, *tree.UnqualifiedStar:
 			all = true
@@ -327,7 +360,7 @@ projection:
 			if expr.As != nil && !expr.As.Empty() && !strings.EqualFold(expr.As.Origin(), value.ColNameOrigin()) {
 				return nil, false, false
 			}
-			names[strings.ToLower(value.ColName())] = struct{}{}
+			names = append(names, strings.ToLower(value.ColName()))
 		default:
 			return nil, false, false
 		}
@@ -341,7 +374,7 @@ projection:
 
 // Return the sole current source's effective relation qualifier. A matching
 // spelling is not proof of the current schema for historical/external sources.
-func rewriteMetadataSingleTableSource(clause *tree.SelectClause, database, table string, lower int64) (string, bool, bool) {
+func rewriteSingleTableSource(clause *tree.SelectClause, database, table, defaultDatabase string, lower int64) (string, bool, bool) {
 	if clause.From == nil || len(clause.From.Tables) != 1 {
 		return "", false, false
 	}
@@ -370,11 +403,15 @@ func rewriteMetadataSingleTableSource(clause *tree.SelectClause, database, table
 		return "", false, false
 	}
 	sourceDatabase := string(tableName.Schema())
-	// An unqualified source binds in the caller's default database (or to a
-	// CTE), not necessarily in the rule's target database. Require an explicit
-	// schema rather than infer its identity from the metadata view's context.
-	if !tableName.ExplicitSchema || sourceDatabase == "" ||
-		tree.NewCStr(sourceDatabase, lower).Compare() != tree.NewCStr(database, lower).Compare() {
+	// Only callers that have proven the default database and ruled out CTE
+	// shadowing may identify an unqualified source with the write target.
+	if !tableName.ExplicitSchema {
+		if isPlaceholderTableName(sourceDatabase, string(tableName.Name())) {
+			return "", false, false
+		}
+		sourceDatabase = defaultDatabase
+	}
+	if sourceDatabase == "" || tree.NewCStr(sourceDatabase, lower).Compare() != tree.NewCStr(database, lower).Compare() {
 		return "", false, false
 	}
 	return qualifier, aliased, true

@@ -856,12 +856,36 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 		if prepare, ok := stmt.(*tree.PrepareStmt); ok && prepare.Stmt != nil {
 			attachStmt = prepare.Stmt
 		}
+		// DML EXPLAIN uses the same target policy as the enclosed statement.
+		var explained tree.Statement
+		switch explain := attachStmt.(type) {
+		case *tree.ExplainStmt:
+			explained = explain.Statement
+		case *tree.ExplainAnalyze:
+			explained = explain.Statement
+		case *tree.ExplainPhyPlan:
+			explained = explain.Statement
+		}
+		switch explained.(type) {
+		case *tree.Update, *tree.Delete:
+			attachStmt = explained
+		}
 		switch s := attachStmt.(type) {
+		case *tree.Update:
+			s.RewriteOption = rewriteOption
+		case *tree.Delete:
+			s.RewriteOption = rewriteOption
 		case *tree.Select:
 			s.RewriteOption = rewriteOption
 		case *tree.ShowColumns:
 			s.RewriteOption = rewriteOption
 		case *tree.ShowCreateTable:
+			s.RewriteOption = rewriteOption
+		case *tree.ShowIndex:
+			s.RewriteOption = rewriteOption
+		case *tree.ShowIndexIgnored:
+			s.RewriteOption = rewriteOption
+		case *tree.ShowIndexStatus:
 			s.RewriteOption = rewriteOption
 		case *tree.ParenSelect:
 			if s.Select != nil {

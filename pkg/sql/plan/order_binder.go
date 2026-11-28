@@ -355,11 +355,13 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 }
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
+	// DML's generated storage projection is outside the user's ORDER BY scope.
+	useOutput := b.ctx.dmlPhysicalRefs == nil
 	// Parentheses do not turn a top-level ORDER BY name into a nested
 	// expression. Keep the same output-name precedence for `ORDER BY name` and
 	// `ORDER BY (name)`.
 	rootExpr := unwrapParenExpr(astExpr)
-	if colRef, ok := rootExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
+	if colRef, ok := rootExpr.(*tree.UnresolvedName); useOutput && ok && colRef.NumParts == 1 {
 		if pos, found, err := resolveOrderOutputName(b.GetContext(), b.ctx, colRef.ColName()); err != nil {
 			return nil, err
 		} else if found {
@@ -372,7 +374,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	// float, boolean, NULL, ... -- is a legal constant expression and falls
 	// through to the regular expression binding below (and to the DISTINCT
 	// order contract there), exactly like its parenthesized form.
-	if numVal, ok := astExpr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+	if numVal, ok := astExpr.(*tree.NumVal); useOutput && ok && numVal.Kind() == tree.Int {
 		colPos, _ := numVal.Int64()
 		if numVal.Negative() {
 			colPos = -colPos

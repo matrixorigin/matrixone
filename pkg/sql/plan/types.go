@@ -395,6 +395,8 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+	dmlRewriteTargets map[*tree.TableName]*dmlTargetRewrite
+	dmlRewriteFilters map[int32]struct{}
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
@@ -945,6 +947,8 @@ type BindContext struct {
 	// observes the session's virtual-column value.
 	physicalGeneratedRefs    map[*tree.UnresolvedName]struct{}
 	physicalMySQLSpecialRefs map[*tree.UnresolvedName]struct{}
+	// Only the generated write projection can address policy-pruned columns.
+	dmlPhysicalRefs map[*tree.UnresolvedName]struct{}
 	// Tags whose rows can be NULL-extended by a join in this query block.
 	nullExtendedTags map[int32]bool
 	// The grouping/window rewrite owns this exact generated source. Neither
@@ -1453,6 +1457,8 @@ type Binding struct {
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)
 	originCols []string
+	// Optional logical order of star expansion over the binding's physical columns.
+	starColumnOrder []int32
 	// headingProvenance carries expression-heading syntax through a derived
 	// table/CTE so SELECT * can retain the original literal spelling. It is
 	// sparse and keyed by column ordinal.
@@ -1473,6 +1479,8 @@ type Binding struct {
 	colIdByName    map[string]int32
 	isClusterTable bool
 	defaults       []string
+
+	dmlStorageColumns map[string]int32
 }
 
 const (

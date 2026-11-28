@@ -42,6 +42,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	builder.zeroScalarPolicy = zeroScalarRetainOnly
 
 	queryBindCtx := NewBindContext(builder, nil)
+	if err = builder.enableDeleteTargetRewrites(queryBindCtx, stmt, tblInfo.alias, tblInfo.tableDefs); err != nil {
+		return nil, err
+	}
 	lastNodeId, colName2Idx, err := deleteToSelect(builder, queryBindCtx, stmt, tblInfo)
 	if err != nil {
 		return nil, err
@@ -78,7 +81,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
 	// todo will do not lock table now.
-	unrestrictedDelete := isUnrestrictedDelete(stmt, len(tblInfo.tableDefs))
+	unrestrictedDelete := len(builder.dmlRewriteTargets) == 0 && isUnrestrictedDelete(stmt, len(tblInfo.tableDefs))
 	needLockTable := unrestrictedDelete
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)

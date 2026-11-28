@@ -864,6 +864,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		if binding != nil {
 			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
+			if binding.dmlStorageColumns != nil {
+				if _, physical := b.ctx.dmlPhysicalRefs[astExpr]; physical {
+					if pos, ok := binding.dmlStorageColumns[col]; ok {
+						colPos = pos
+					}
+				}
+			}
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
