@@ -138,7 +138,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@37d345f2abdbcf1924fd8b7132008f52f64d3b79
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@e35b548efb69dd9358a57ceb1faaf0ac0bf30b43
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
       enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
