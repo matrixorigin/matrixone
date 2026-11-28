@@ -16,14 +16,8 @@ package iscp
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
-	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -40,21 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-)
-
-// ValueRepr selects how extractRowFromVector renders the types whose native Go
-// value and SQL-display string differ (temporal / decimal / uuid). A consumer that
-// builds SQL text needs the display string; a consumer that binary-encodes the value
-// (the WAND retrieval index) needs the native value so it can serialize it exactly.
-type ValueRepr int
-
-const (
-	// ReprSQLString is the historical behavior: datetime/time/timestamp/decimal/uuid
-	// come out as their SQL-display string (feeds convertColIntoSql). Default.
-	ReprSQLString ValueRepr = iota
-	// ReprNative returns those types as their native Go value (types.Datetime,
-	// types.Decimal128, types.Uuid, ...) so a binary encoder round-trips them exactly.
-	ReprNative
 )
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
@@ -67,7 +45,6 @@ func extractRowFromEveryVector(
 	dataSet *batch.Batch,
 	rowIndex int,
 	row []any,
-	repr ValueRepr,
 ) error {
 	for i := 0; i < len(row); i++ {
 		vec := dataSet.Vecs[i]
@@ -80,7 +57,7 @@ func extractRowFromEveryVector(
 			rowIndex = 0
 		}
 
-		if err := extractRowFromVector(ctx, vec, i, row, rowIndex, repr); err != nil {
+		if err := extractRowFromVector(ctx, vec, i, row, rowIndex); err != nil {
 			return err
 		}
 		rowIndex = rowIndexBackup
@@ -88,373 +65,47 @@ func extractRowFromEveryVector(
 	return nil
 }
 
-// extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int, repr ValueRepr) error {
-	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
-		row[i] = nil
-		return nil
-	}
-
-	switch vec.GetType().Oid { //get col
-	case types.T_json:
-		row[i] = types.DecodeJson(vec.CloneBytesAt(rowIndex))
-	case types.T_bool:
-		row[i] = vector.GetFixedAtWithTypeCheck[bool](vec, rowIndex)
-	case types.T_bit:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
-	case types.T_int8:
-		row[i] = vector.GetFixedAtWithTypeCheck[int8](vec, rowIndex)
-	case types.T_uint8:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint8](vec, rowIndex)
-	case types.T_int16:
-		row[i] = vector.GetFixedAtWithTypeCheck[int16](vec, rowIndex)
-	case types.T_uint16:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint16](vec, rowIndex)
-	case types.T_int32:
-		row[i] = vector.GetFixedAtWithTypeCheck[int32](vec, rowIndex)
-	case types.T_uint32:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint32](vec, rowIndex)
-	case types.T_int64:
-		row[i] = vector.GetFixedAtWithTypeCheck[int64](vec, rowIndex)
-	case types.T_uint64:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
-	case types.T_float32:
-		row[i] = vector.GetFixedAtWithTypeCheck[float32](vec, rowIndex)
-	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		row[i], _ = vector.GetLowPrecisionFloatAt(vec, rowIndex)
-	case types.T_float64:
-		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = vec.CloneBytesAt(rowIndex)
-	case types.T_array_float32:
-		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
-		//+------------------------------+
-		//| abs(cast([1,2,3] as vecf32)) |
-		//+------------------------------+
-		//|   �?   @  @@                  |
-		//+------------------------------+
-		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
-	case types.T_array_float16:
-		// vecf16: extract natively as []types.Float16 (2 bytes/element). The
-		// cuvs CDC writer reinterprets these bytes verbatim — no f32 widening.
-		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
-	case types.T_array_bf16:
-		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
-	case types.T_array_float8, types.T_array_float4:
-		row[i] = vec.CloneBytesAt(rowIndex)
-	case types.T_array_int8:
-		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
-	case types.T_array_uint8:
-		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
-	case types.T_array_float64:
-		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
-	case types.T_date:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Date](vec, rowIndex)
-	case types.T_datetime:
-		if repr == ReprNative {
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex)
-		} else {
-			scale := vec.GetType().Scale
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
-		}
-	case types.T_time:
-		if repr == ReprNative {
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex)
-		} else {
-			scale := vec.GetType().Scale
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex).String2(scale)
-		}
-	case types.T_timestamp:
-		if repr == ReprNative {
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex)
-		} else {
-			scale := vec.GetType().Scale
-			//TODO:get the right timezone
-			//timeZone := ses.GetTimeZone()
-			timeZone := time.UTC
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
-		}
-	case types.T_decimal64:
-		if repr == ReprNative {
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex)
-		} else {
-			scale := vec.GetType().Scale
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
-		}
-	case types.T_decimal128:
-		if repr == ReprNative {
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex)
-		} else {
-			scale := vec.GetType().Scale
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
-		}
-	case types.T_uuid:
-		if repr == ReprNative {
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex)
-		} else {
-			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
-		}
-	case types.T_Rowid:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Rowid](vec, rowIndex)
-	case types.T_Blockid:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Blockid](vec, rowIndex)
-	case types.T_TS:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.TS](vec, rowIndex)
-	case types.T_enum:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Enum](vec, rowIndex)
-	default:
+// extractRowFromVector sets row[i] to row rowIndex of vec, as vector.ExportValue
+// returns it.
+func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
+	if !vector.SupportsAny(vec.GetType().Oid) {
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
 		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
+	row[i] = vector.ExportValue(vec, rowIndex)
 	return nil
-}
-
-// sqlStringRepr returns v, a value extracted with ReprNative from a column of type typ, as
-// extracted with ReprSQLString.
-func sqlStringRepr(v any, typ *types.Type) any {
-	switch x := v.(type) {
-	case types.Datetime:
-		return x.String2(typ.Scale)
-	case types.Time:
-		return x.String2(typ.Scale)
-	case types.Timestamp:
-		return x.String2(time.UTC, typ.Scale)
-	case types.Decimal64:
-		return x.Format(typ.Scale)
-	case types.Decimal128:
-		return x.Format(typ.Scale)
-	case types.Uuid:
-		return x.String()
-	}
-	return v
 }
 
 // SqlLiteral returns the SQL literal of row i of vec.
 func SqlLiteral(ctx context.Context, vec *vector.Vector, i int) (string, error) {
-	if vec.IsConst() {
-		i = 0
+	if !vector.SupportsAny(vec.GetType().Oid) {
+		return "", moerr.NewInternalErrorf(ctx, "SqlLiteral : unsupported type %d", vec.GetType().Oid)
 	}
-	row := make([]any, 1)
-	if err := extractRowFromVector(ctx, vec, 0, row, i, ReprSQLString); err != nil {
-		return "", err
-	}
-	buf, err := convertColIntoSql(ctx, row[0], vec.GetType(), nil)
+	buf, err := convertColIntoSql(ctx, vector.ExportValue(vec, i), vec.GetType(), nil)
 	return string(buf), err
 }
 
+// convertColIntoSql appends data, a value of type typ as vector.ExportValue
+// returns it, as a literal of the SQL MatrixOne runs (types.AppendMOSQLLiteral),
+// and NULL as a typed NULL.
 func convertColIntoSql(
 	ctx context.Context,
 	data any,
 	typ *types.Type,
 	sqlBuff []byte) ([]byte, error) {
 	if data == nil {
+		// a typed NULL keeps the column of a VALUES list typed
 		typstr := typ.DescString()
 		if typ.Oid == types.T_enum {
 			// The source projection restores the ENUM domain. Its transport type
 			// must be valid SQL without member metadata in the runtime type.
 			typstr = types.T_uint16.ToType().DescString()
 		}
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST(NULL as %s)", typstr))
-		return sqlBuff, nil
+		return fmt.Appendf(sqlBuff, "CAST(NULL as %s)", typstr), nil
 	}
-	var temp string
-	switch typ.Oid { //get col
-	case types.T_json:
-		temp = data.(bytejson.ByteJson).String()
-		sqlBuff = appendSQLString(sqlBuff, temp)
-	case types.T_bool:
-		b := data.(bool)
-		if b {
-			temp = "true"
-		} else {
-			temp = "false"
-		}
-		sqlBuff = appendString(sqlBuff, temp)
-	case types.T_bit:
-		value := data.(uint64)
-		bitLength := typ.Width
-		byteLength := (bitLength + 7) / 8
-		b := types.EncodeUint64(&value)[:byteLength]
-		slices.Reverse(b)
-		sqlBuff = appendHex(sqlBuff, b)
-	case types.T_int8:
-		value := data.(int8)
-		sqlBuff = appendInt64(sqlBuff, int64(value))
-	case types.T_uint8:
-		value := data.(uint8)
-		sqlBuff = appendUint64(sqlBuff, uint64(value))
-	case types.T_int16:
-		value := data.(int16)
-		sqlBuff = appendInt64(sqlBuff, int64(value))
-	case types.T_uint16:
-		value := data.(uint16)
-		sqlBuff = appendUint64(sqlBuff, uint64(value))
-	case types.T_int32:
-		value := data.(int32)
-		sqlBuff = appendInt64(sqlBuff, int64(value))
-	case types.T_uint32:
-		value := data.(uint32)
-		sqlBuff = appendUint64(sqlBuff, uint64(value))
-	case types.T_int64:
-		value := data.(int64)
-		sqlBuff = appendInt64(sqlBuff, value)
-	case types.T_uint64:
-		value := data.(uint64)
-		sqlBuff = appendUint64(sqlBuff, value)
-	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		value := data.(float32)
-		sqlBuff = appendFloat64(sqlBuff, float64(value), 32)
-	case types.T_float64:
-		value := data.(float64)
-		sqlBuff = appendFloat64(sqlBuff, value, 64)
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		sqlBuff = appendHex(sqlBuff, data.([]byte))
-	case types.T_char,
-		types.T_varchar,
-		types.T_text,
-		types.T_datalink:
-		value := string(data.([]byte))
-		value = strings.Replace(value, "\\", "\\\\", -1)
-		value = strings.Replace(value, "'", "\\'", -1)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, []byte(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_array_float32:
-		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
-		//+------------------------------+
-		//| abs(cast([1,2,3] as vecf32)) |
-		//+------------------------------+
-		//|   �?   @  @@                  |
-		//+------------------------------+
-		value := data.([]float32)
-		typstr := typ.DescString()
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
-	case types.T_array_float64:
-		value := data.([]float64)
-		typstr := typ.DescString()
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
-	case types.T_array_float16:
-		// Narrow base columns (vecf16/bf16/int8/uint8). ArrayToString renders the
-		// half/bf16 bit pattern back to its decimal value and the int8/uint8 codes
-		// to integers, so CAST('[...]' as vecXXX(n)) reconstructs the same vector
-		// the ivfflat entry projection expects (matches the synchronous build,
-		// which reads the base column directly in SQL).
-		value := data.([]types.Float16)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
-	case types.T_array_bf16:
-		value := data.([]types.BF16)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
-	case types.T_array_float8, types.T_array_float4:
-		// the exact text: replaying it stores the same cell, where the decoded values would
-		// be quantized again (a vecf4 global scale follows the decoded maximum)
-		text, err := types.BlockScaledToJSON(data.([]byte))
-		if err != nil {
-			return nil, err
-		}
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", text, typ.DescString()))
-	case types.T_array_int8:
-		value := data.([]int8)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
-	case types.T_array_uint8:
-		value := data.([]uint8)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
-	case types.T_date:
-		value := data.(types.Date)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_datetime:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_time:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_timestamp:
-		value := data.(string)
-		ts, err := types.ParseTimestamp(time.UTC, value, typ.Scale)
-		if err != nil {
-			return nil, err
-		}
-		sqlBuff = appendTimestampSQL(sqlBuff, ts, typ.Scale)
-	case types.T_decimal64:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_decimal128:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_uuid:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_Rowid:
-		value := data.(types.Rowid)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_Blockid:
-		value := data.(types.Blockid)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_TS:
-		value := data.(types.TS)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.ToString())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_enum:
-		value := data.(types.Enum)
-		// Preserve ordinals even when member labels themselves are numeric.
-		sqlBuff = appendUint64(sqlBuff, uint64(value))
-	default:
-		logutil.Error(
-			"Failed to extract row from vector, unsupported type",
-			zap.Int("typeID", int(typ.Oid)))
-		return nil, moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", typ.Oid)
-	}
-
-	return sqlBuff, nil
-}
-
-func appendHex(dst []byte, src []byte) []byte {
-	dst = append(dst, "x'"...)
-	dst = hex.AppendEncode(dst, src)
-	dst = append(dst, '\'')
-	return dst
-}
-
-func appendSQLString(dst []byte, value string) []byte {
-	dst = appendByte(dst, '\'')
-	for i := 0; i < len(value); i++ {
-		switch value[i] {
-		case '\\', '\'':
-			dst = appendByte(dst, '\\')
-		}
-		dst = appendByte(dst, value[i])
-	}
-	return appendByte(dst, '\'')
-}
-
-func appendTimestampSQL(dst []byte, value types.Timestamp, scale int32) []byte {
-	// Timestamp is stored as a signed microsecond count.  Serializing that
-	// representation through BIT_CAST avoids parsing a session-timezone
-	// dependent string and preserves fractional values and zero timestamps.
-	buf := types.EncodeTimestamp(&value)
-	dst = appendString(dst, "bit_cast(unhex('")
-	dst = hex.AppendEncode(dst, buf)
-	dst = appendString(dst, "') AS TIMESTAMP(")
-	dst = strconv.AppendInt(dst, int64(scale), 10)
-	return appendString(dst, "))")
+	return types.AppendMOSQLLiteral(sqlBuff, *typ, data)
 }
 
 // DescString omits temporal scale. Intermediate casts must retain it: casting
@@ -469,43 +120,12 @@ func sqlCastTypeName(typ *types.Type) string {
 	}
 }
 
-func appendByte(buf []byte, d byte) []byte {
-	return append(buf, d)
-}
-
 func appendBytes(buf []byte, data []byte) []byte {
 	return append(buf, data...)
 }
 
 func appendString(buf []byte, s string) []byte {
 	return appendBytes(buf, []byte(s))
-}
-
-func appendInt64(buf []byte, value int64) []byte {
-	return strconv.AppendInt(buf, value, 10)
-}
-
-func appendUint64(buf []byte, value uint64) []byte {
-	return strconv.AppendUint(buf, value, 10)
-}
-
-func appendFloat64(buf []byte, value float64, bitSize int) []byte {
-	if !math.IsNaN(value) && !math.IsInf(value, 0) {
-		buf = strconv.AppendFloat(buf, value, 'f', -1, bitSize)
-	} else {
-		buf = append(buf, []byte("bit_cast(unhex('")...)
-		var raw [8]byte
-		if bitSize == 32 {
-			binary.LittleEndian.PutUint32(raw[:4], math.Float32bits(float32(value)))
-			buf = hex.AppendEncode(buf, raw[:4])
-			buf = append(buf, []byte("') AS FLOAT)")...)
-		} else {
-			binary.LittleEndian.PutUint64(raw[:], math.Float64bits(value))
-			buf = hex.AppendEncode(buf, raw[:])
-			buf = append(buf, []byte("') AS DOUBLE)")...)
-		}
-	}
-	return buf
 }
 
 // CollectChanges reads one ISCP iteration's change range for index maintenance.

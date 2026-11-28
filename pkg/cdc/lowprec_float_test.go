@@ -56,7 +56,7 @@ func TestLowPrecisionFloatColumnSQL(t *testing.T) {
 		for r, want := range []string{"1.5", "-0.5"} {
 			row := make([]any, 1)
 			require.NoError(t, extractRowFromVector(ctx, vec, 0, row, r))
-			require.Equal(t, []any{float32(map[int]float32{0: 1.5, 1: -0.5}[r])}, row, oid.String())
+			require.Equal(t, []any{vector.GetAny(vec, r, false)}, row, oid.String())
 			sql, err := convertColIntoSql(ctx, row[0], vec.GetType(), nil)
 			require.NoError(t, err)
 			require.Equal(t, want, string(sql), oid.String())

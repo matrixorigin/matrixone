@@ -94,7 +94,7 @@ func (g *ignoredRows) pkString(pk any) string {
 			return label
 		}
 	}
-	return fmt.Sprint(pk)
+	return types.ValueText(*g.pkType, pk)
 }
 
 // pkLiteral returns the SQL literal of the primary key pk.

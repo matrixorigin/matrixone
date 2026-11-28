@@ -55,6 +55,7 @@ func TestValueTextCoversTypeOps(t *testing.T) {
 		text := types.ValueText(typ, val)
 		require.NotContains(t, text, "<unsupported", "%s has no ValueText case", oid)
 		require.Equal(t, text, vec.RowToString(0), oid.String())
+		require.Equal(t, text, types.ValueText(typ, ExportValue(vec, 0)), "%s: the exported form has the same text", oid)
 
 		if !oid.IsBlockScaledArray() { // an empty cell is not a valid block-scaled vector
 			lit, err := types.AppendSQLLiteral(nil, typ, val, time.UTC)

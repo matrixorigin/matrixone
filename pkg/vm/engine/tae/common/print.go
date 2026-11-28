@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -104,6 +103,12 @@ type WithIsComposite struct{}
 
 func (w WithIsComposite) apply(o *opt) { o.isComposite = true }
 
+// TypeStringValue returns the text of v, a value of type t, for TAE's logs
+// and error messages. It is types.ValueText, with these display options for
+// key and string bytes: a composite key is unpacked into its parts, a
+// non-printable string is shown in hex (or as its length with
+// WithDoNotPrintBin), a printable one is cut at 500 bytes, and
+// WithSpecialRowid shows a rowid as the uint64 of its first 8 bytes.
 func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) string {
 	if isNull {
 		return "null"
@@ -112,17 +117,11 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	for _, o := range opts {
 		o.apply(opt)
 	}
-
-	switch t.Oid {
-	case types.T_bool, types.T_int8, types.T_int16, types.T_int32,
-		types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32,
-		types.T_uint64, types.T_float32, types.T_float64:
-		return fmt.Sprintf("%v", v)
-	case types.T_bit:
-		return fmt.Sprintf("%v", v)
-	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
-		buf := v.([]byte)
+	if t.Oid == types.T_Rowid && opt.specialRowid {
+		val := v.(types.Rowid)
+		return strconv.FormatUint(types.DecodeUint64(val[:]), 10)
+	}
+	if buf, ok := v.([]byte); ok && (t.Oid.IsMySQLString() || t.Oid.IsDatalink()) {
 		if opt.isComposite {
 			tuple, err := types.Unpack(buf)
 			if err == nil {
@@ -153,93 +152,11 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		} else {
 			return fmt.Sprintf("%x", buf)
 		}
-	case types.T_array_float32:
-		// The parent function is mostly used to print the vector content for debugging.
-		return types.BytesToArrayToString[float32](v.([]byte))
-	case types.T_array_float64:
-		return types.BytesToArrayToString[float64](v.([]byte))
-	case types.T_array_float8, types.T_array_float4:
-		text, err := types.BlockScaledToString(v.([]byte))
-		if err != nil {
-			return err.Error()
-		}
-		return text
-	case types.T_array_bf16:
-		return types.BytesToArrayToString[types.BF16](v.([]byte))
-	case types.T_array_float16:
-		return types.BytesToArrayToString[types.Float16](v.([]byte))
-	case types.T_array_int8:
-		return types.BytesToArrayToString[int8](v.([]byte))
-	case types.T_array_uint8:
-		return types.BytesToArrayToString[uint8](v.([]byte))
-	case types.T_date:
-		val := v.(types.Date)
-		return val.String()
-	case types.T_datetime:
-		val := v.(types.Datetime)
-		return val.String2(6)
-	case types.T_time:
-		val := v.(types.Time)
-		return val.String2(6)
-	case types.T_timestamp:
-		val := v.(types.Timestamp)
-		return val.String2(time.Local, 6)
-	case types.T_year:
-		val := v.(types.MoYear)
-		return val.String()
-	case types.T_decimal64:
-		val := v.(types.Decimal64)
-		return val.Format(t.Scale)
-	case types.T_decimal128:
-		val := v.(types.Decimal128)
-		return val.Format(t.Scale)
-	case types.T_json:
-		val := v.([]byte)
-		j := types.DecodeJson(val)
-		return j.String()
-	case types.T_uuid:
-		val := v.(types.Uuid)
-		return val.String()
-	case types.T_TS:
-		val := v.(types.TS)
-		return val.ToString()
-	case types.T_Rowid:
-		val := v.(types.Rowid)
-		if opt.specialRowid {
-			return strconv.FormatUint(types.DecodeUint64(val[:]), 10)
-		} else {
-			val := v.(types.Rowid)
-			return val.String()
-		}
-	case types.T_Blockid:
-		val := v.(types.Blockid)
-		return val.String()
-	case types.T_enum:
-		val := v.(types.Enum)
-		return fmt.Sprintf("%v", val)
-	default:
-		return fmt.Sprintf("%v", v)
 	}
+	return types.ValueText(t, v)
 }
 
-func vec2Str[T any](vec []T, v *vector.Vector, opts ...TypePrintOpt) string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", v.Length()))
-	first := true
-	for i := 0; i < len(vec); i++ {
-		if !first {
-			_ = w.WriteByte(',')
-		}
-		if v.GetNulls().Contains(uint64(i)) {
-			_, _ = w.WriteString(TypeStringValue(*v.GetType(), nil, true))
-		} else {
-			_, _ = w.WriteString(TypeStringValue(*v.GetType(), vec[i], false, opts...))
-		}
-		first = false
-	}
-	return w.String()
-}
-
+// MoVectorToString returns the first printN rows of v as text.
 func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string {
 	if v == nil || v.Length() == 0 {
 		return "empty vector"
@@ -247,69 +164,19 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 	if printN > v.Length() {
 		printN = v.Length()
 	}
-	switch v.GetType().Oid {
-	case types.T_bool:
-		return vec2Str(vector.MustFixedColWithTypeCheck[bool](v)[:printN], v)
-	case types.T_int8:
-		return vec2Str(vector.MustFixedColWithTypeCheck[int8](v)[:printN], v)
-	case types.T_int16:
-		return vec2Str(vector.MustFixedColWithTypeCheck[int16](v)[:printN], v)
-	case types.T_int32:
-		return vec2Str(vector.MustFixedColWithTypeCheck[int32](v)[:printN], v)
-	case types.T_int64:
-		return vec2Str(vector.MustFixedColWithTypeCheck[int64](v)[:printN], v)
-	case types.T_uint8:
-		return vec2Str(vector.MustFixedColWithTypeCheck[uint8](v)[:printN], v)
-	case types.T_uint16:
-		return vec2Str(vector.MustFixedColWithTypeCheck[uint16](v)[:printN], v)
-	case types.T_uint32:
-		return vec2Str(vector.MustFixedColWithTypeCheck[uint32](v)[:printN], v)
-	case types.T_uint64:
-		return vec2Str(vector.MustFixedColWithTypeCheck[uint64](v)[:printN], v)
-	case types.T_float32:
-		return vec2Str(vector.MustFixedColWithTypeCheck[float32](v)[:printN], v)
-	case types.T_float64:
-		return vec2Str(vector.MustFixedColWithTypeCheck[float64](v)[:printN], v)
-	case types.T_date:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Date](v)[:printN], v)
-	case types.T_datetime:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Datetime](v)[:printN], v)
-	case types.T_time:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Time](v)[:printN], v)
-	case types.T_timestamp:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Timestamp](v)[:printN], v)
-	case types.T_enum:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Enum](v)[:printN], v)
-	case types.T_year:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.MoYear](v)[:printN], v)
-	case types.T_decimal64:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal64](v)[:printN], v)
-	case types.T_decimal128:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal128](v)[:printN], v)
-	case types.T_uuid:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Uuid](v)[:printN], v)
-	case types.T_TS:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.TS](v)[:printN], v)
-	case types.T_Rowid:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Rowid](v)[:printN], v)
-	case types.T_Blockid:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Blockid](v)[:printN], v)
-	}
-	if v.GetType().IsVarlen() {
-		if !v.HasNull() {
-			return vec2Str(vector.InefficientMustBytesCol(v)[:printN], v, opts...)
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", v.Length()))
+	for i := 0; i < printN; i++ {
+		if i > 0 {
+			_ = w.WriteByte(',')
 		}
-		vs := make([][]byte, 0, printN)
-		for i := 0; i < printN; i++ {
-			if v.GetNulls().Contains(uint64(i)) {
-				vs = append(vs, nil)
-			} else {
-				vs = append(vs, v.GetBytesAt(i))
-			}
+		if v.IsNull(uint64(i)) {
+			_, _ = w.WriteString(TypeStringValue(*v.GetType(), nil, true))
+		} else {
+			_, _ = w.WriteString(TypeStringValue(*v.GetType(), vector.GetAny(v, i, false), false, opts...))
 		}
-		return vec2Str(vs, v, opts...)
 	}
-	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
+	return w.String()
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {

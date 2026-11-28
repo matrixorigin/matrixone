@@ -456,7 +456,7 @@ func TestGetAny(t *testing.T) {
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
 		require.NoError(t, err)
-		require.Equal(t, "0001-01-01 00:00:10.000000 UTC", s)
+		require.Equal(t, "0001-01-01 00:00:10", s)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

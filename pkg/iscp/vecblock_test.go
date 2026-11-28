@@ -16,7 +16,6 @@ package iscp
 
 import (
 	"context"
-	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -49,12 +48,12 @@ func TestISCPVecBlock(t *testing.T) {
 		for _, values := range [][]float32{{1, -3, 0, 6}, review, {1e-30, 3e20, -2, 0.5}} {
 			vec := vecBlockTestVector(t, oid, values, mp)
 			row := make([]any, 1)
-			require.NoError(t, extractRowFromVector(ctx, vec, 0, row, 0, ValueRepr(0)))
+			require.NoError(t, extractRowFromVector(ctx, vec, 0, row, 0))
 			sql, err := convertColIntoSql(ctx, row[0], vec.GetType(), nil)
 			require.NoError(t, err)
 			text, err := types.BlockScaledToJSON(vec.GetBytesAt(0))
 			require.NoError(t, err)
-			require.Equal(t, "CAST('"+text+"' as "+oid.String()+"("+strconv.Itoa(len(values))+"))", string(sql))
+			require.Equal(t, "'"+text+"'", string(sql))
 			replayed, err := types.StringToBlockScaled(f, text)
 			require.NoError(t, err)
 			require.Equal(t, vec.GetBytesAt(0), replayed, "%s %v", oid, values)

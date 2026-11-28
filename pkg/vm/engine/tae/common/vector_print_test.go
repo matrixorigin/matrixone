@@ -40,7 +40,7 @@ func TestMoVectorToStringScalarTypes(t *testing.T) {
 	checkFixedVectorPrint(t, types.T_date, types.Date(2), "0001-01-03")
 	ts, err := types.ParseTimestamp(time.Local, "2020-01-02 03:04:05", 6)
 	require.NoError(t, err)
-	checkFixedVectorPrint(t, types.T_timestamp, ts, "2020-01-02 03:04:05.000000")
+	checkFixedVectorPrint(t, types.T_timestamp, ts, "2020-01-02 03:04:05") // the column scale, 0
 	checkFixedVectorPrint(t, types.T_decimal128, types.Decimal128{B0_63: 7}, "7")
 	checkFixedVectorPrint(t, types.T_uuid, types.Uuid{}, "00000000-0000-0000-0000-000000000000")
 }

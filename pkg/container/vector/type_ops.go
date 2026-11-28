@@ -54,6 +54,9 @@ type typeOps struct {
 	// varlena type); rawFromValue is the raw bytes of a value.
 	valueFromRaw func(raw []byte) any
 	rawFromValue func(val any) []byte
+	// exportValue is row i as the value code outside the engine works with
+	// (see ExportValue).
+	exportValue func(v *Vector, i int) any
 
 	// constructors of per-type functions
 	unionAll    func(mp *mpool.MPool) func(v, w *Vector) error              // getUnionAllFunction
@@ -89,6 +92,9 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		},
 		rawFromValue: func(val any) []byte {
 			return types.EncodeFixed(val.(T))
+		},
+		exportValue: func(v *Vector, i int) any {
+			return GetFixedAtNoTypeCheck[T](v, i)
 		},
 		unionAll:    unionAllFixed[T],
 		appendBytes: appendBytesToFixSized[T],
@@ -131,6 +137,9 @@ func varlenOps() typeOps {
 	ops.rawFromValue = func(val any) []byte {
 		return val.([]byte)
 	}
+	ops.exportValue = func(v *Vector, i int) any {
+		return v.CloneBytesAt(i)
+	}
 	ops.unionAll = unionAllVarlen
 	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return func(v []byte, isNull bool, mp *mpool.MPool) error {
@@ -138,6 +147,25 @@ func varlenOps() typeOps {
 		}
 	}
 	// newResult stays newResultFunc[types.Varlena]
+	return ops
+}
+
+// jsonOps are varlenOps whose exported value is the decoded document.
+func jsonOps() typeOps {
+	ops := varlenOps()
+	ops.exportValue = func(v *Vector, i int) any {
+		return types.DecodeJson(v.CloneBytesAt(i))
+	}
+	return ops
+}
+
+// arrayOps are varlenOps for a vector of T elements, whose exported value is
+// the []T of the row.
+func arrayOps[T types.ArrayElement]() typeOps {
+	ops := varlenOps()
+	ops.exportValue = func(v *Vector, i int) any {
+		return GetArrayAt[T](v, i)
+	}
 	return ops
 }
 
@@ -189,18 +217,18 @@ var typeOpsRows = []typeOpsRow{
 	{types.T_varchar, varlenOps()},
 	{types.T_binary, varlenOps()},
 	{types.T_varbinary, varlenOps()},
-	{types.T_json, varlenOps()},
+	{types.T_json, jsonOps()},
 	{types.T_blob, varlenOps()},
 	{types.T_text, varlenOps()},
 	{types.T_datalink, varlenOps()},
 	{types.T_geometry, varlenOps()},
 	{types.T_geometry32, varlenOps()},
-	{types.T_array_float32, varlenOps()},
-	{types.T_array_float64, varlenOps()},
-	{types.T_array_bf16, varlenOps()},
-	{types.T_array_float16, varlenOps()},
-	{types.T_array_int8, varlenOps()},
-	{types.T_array_uint8, varlenOps()},
+	{types.T_array_float32, arrayOps[float32]()},
+	{types.T_array_float64, arrayOps[float64]()},
+	{types.T_array_bf16, arrayOps[types.BF16]()},
+	{types.T_array_float16, arrayOps[types.Float16]()},
+	{types.T_array_int8, arrayOps[int8]()},
+	{types.T_array_uint8, arrayOps[uint8]()},
 	{types.T_array_float8, varlenOps()},
 	{types.T_array_float4, varlenOps()},
 }
@@ -301,4 +329,21 @@ func RawFromValue(oid types.T, val any) []byte {
 		panic(moerr.NewInternalErrorNoCtxf("RawFromValue: unsupported type %s", oid.String()))
 	}
 	return ops.rawFromValue(val)
+}
+
+// ExportValue returns row i of vec as the value code outside the engine
+// (CDC, index maintenance) works with, or nil for a NULL row: what GetAny
+// returns with a copy of varlena bytes, except that a json row is its
+// decoded bytejson.ByteJson and a numeric vector row its []T
+// ([]float32, []types.BF16, ...). types.ValueText and AppendSQLLiteral
+// accept these values. It panics for a type SupportsAny rejects.
+func ExportValue(vec *Vector, i int) any {
+	if vec.IsNull(uint64(i)) {
+		return nil
+	}
+	ops, ok := opsOf(vec)
+	if !ok {
+		panic(moerr.NewInternalErrorNoCtxf("ExportValue: unsupported type %s", vec.typ.String()))
+	}
+	return ops.exportValue(vec, i)
 }

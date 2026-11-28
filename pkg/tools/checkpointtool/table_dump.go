@@ -2911,48 +2911,8 @@ func appendCSVQuotedVecValue(w *bytes.Buffer, vec *vector.Vector, rowIdx int) {
 }
 
 func appendCSVUnquotedVecValue(w *bytes.Buffer, typ types.Type, vec *vector.Vector, rowIdx int) {
-	switch vec.GetType().Oid {
-	case types.T_bool:
-		if vector.MustFixedColWithTypeCheck[bool](vec)[rowIdx] {
-			w.WriteString("true")
-		} else {
-			w.WriteString("false")
-		}
-	case types.T_int8:
-		appendCSVInt(w, int64(vector.MustFixedColWithTypeCheck[int8](vec)[rowIdx]))
-	case types.T_int16:
-		appendCSVInt(w, int64(vector.MustFixedColWithTypeCheck[int16](vec)[rowIdx]))
-	case types.T_int32:
-		appendCSVInt(w, int64(vector.MustFixedColWithTypeCheck[int32](vec)[rowIdx]))
-	case types.T_int64:
-		appendCSVInt(w, vector.MustFixedColWithTypeCheck[int64](vec)[rowIdx])
-	case types.T_uint8:
-		appendCSVUint(w, uint64(vector.MustFixedColWithTypeCheck[uint8](vec)[rowIdx]))
-	case types.T_uint16:
-		appendCSVUint(w, uint64(vector.MustFixedColWithTypeCheck[uint16](vec)[rowIdx]))
-	case types.T_uint32:
-		appendCSVUint(w, uint64(vector.MustFixedColWithTypeCheck[uint32](vec)[rowIdx]))
-	case types.T_uint64:
-		appendCSVUint(w, vector.MustFixedColWithTypeCheck[uint64](vec)[rowIdx])
-	case types.T_float32:
-		appendCSVFloat(w, float64(vector.MustFixedColWithTypeCheck[float32](vec)[rowIdx]), 32)
-	case types.T_float64:
-		appendCSVFloat(w, vector.MustFixedColWithTypeCheck[float64](vec)[rowIdx], 64)
-	case types.T_decimal64:
-		appendDecimal64(w, vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[rowIdx], vec.GetType().Scale)
-	case types.T_decimal128:
-		appendDecimal128(w, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[rowIdx], vec.GetType().Scale)
-	case types.T_date:
-		appendDate(w, vector.MustFixedColWithTypeCheck[types.Date](vec)[rowIdx])
-	case types.T_time:
-		w.WriteString(vector.MustFixedColWithTypeCheck[types.Time](vec)[rowIdx].String2(vec.GetType().Scale))
-	case types.T_datetime:
-		w.WriteString(vector.MustFixedColWithTypeCheck[types.Datetime](vec)[rowIdx].String2(vec.GetType().Scale))
-	case types.T_timestamp:
-		w.WriteString(vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[rowIdx].String2(time.Local, vec.GetType().Scale))
-	default:
-		w.WriteString(vecValueToString(vec, rowIdx))
-	}
+	var scratch [64]byte
+	w.Write(types.AppendValueText(scratch[:0], *vec.GetType(), vector.GetAny(vec, rowIdx, false), time.Local))
 }
 
 func appendEscapedSQLLoadString(w *bytes.Buffer, s string, enclosed byte) {
@@ -3027,32 +2987,6 @@ func bitValueToLoadBytes(value uint64, width int32) []byte {
 	return out
 }
 
-func appendDecimal64(w *bytes.Buffer, value types.Decimal64, scale int32) {
-	if value.Sign() {
-		w.WriteByte('-')
-		value = value.Minus()
-	}
-	v := uint64(value)
-	if scale <= 0 {
-		appendCSVUint(w, v)
-		return
-	}
-	pow := uint64(1)
-	for i := int32(0); i < scale; i++ {
-		pow *= 10
-	}
-	intPart := v / pow
-	fracPart := v % pow
-	appendCSVUint(w, intPart)
-	w.WriteByte('.')
-	var scratch [32]byte
-	frac := strconv.AppendUint(scratch[:0], fracPart, 10)
-	for i := len(frac); i < int(scale); i++ {
-		w.WriteByte('0')
-	}
-	w.Write(frac)
-}
-
 func appendDecimal128(w *bytes.Buffer, value types.Decimal128, scale int32) {
 	if value.Sign() {
 		w.WriteByte('-')
@@ -3090,15 +3024,6 @@ func appendDecimal128(w *bytes.Buffer, value types.Decimal128, scale int32) {
 		scratch[i] = '0'
 	}
 	w.Write(scratch[i:])
-}
-
-func appendDate(w *bytes.Buffer, value types.Date) {
-	year, month, day, _ := value.Calendar(true)
-	appendZeroPaddedInt(w, int64(year), 4)
-	w.WriteByte('-')
-	appendZeroPaddedInt(w, int64(month), 2)
-	w.WriteByte('-')
-	appendZeroPaddedInt(w, int64(day), 2)
 }
 
 func appendZeroPaddedInt(w *bytes.Buffer, value int64, width int) {

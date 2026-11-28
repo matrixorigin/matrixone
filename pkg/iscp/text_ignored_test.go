@@ -231,26 +231,6 @@ func TestFulltext2WriterIgnoredNativeKey(t *testing.T) {
 	require.Contains(t, strings.Join(*sqls, ";"), "('12.50', 20351, ")
 }
 
-func TestSqlStringRepr(t *testing.T) {
-	typ := &types.Type{Scale: 2}
-	dt, err := types.ParseDatetime("2026-11-03 10:00:00.25", 2)
-	require.NoError(t, err)
-	require.Equal(t, "2026-11-03 10:00:00.25", sqlStringRepr(dt, typ))
-	tm, err := types.ParseTime("10:00:00.25", 2)
-	require.NoError(t, err)
-	require.Equal(t, "10:00:00.25", sqlStringRepr(tm, typ))
-	ts, err := types.ParseTimestamp(nil, "2026-11-03 10:00:00.25", 2)
-	require.NoError(t, err)
-	require.Equal(t, "2026-11-03 10:00:00.25", sqlStringRepr(ts, typ))
-	d128, err := types.Decimal128FromFloat64(3.5, 20, 2)
-	require.NoError(t, err)
-	require.Equal(t, "3.50", sqlStringRepr(d128, typ))
-	u, err := types.ParseUuid("6d1b1fdb-5dc2-11ed-bbe0-a4bb6d0c0b97")
-	require.NoError(t, err)
-	require.Equal(t, "6d1b1fdb-5dc2-11ed-bbe0-a4bb6d0c0b97", sqlStringRepr(u, typ))
-	require.Equal(t, int64(4), sqlStringRepr(int64(4), typ))
-}
-
 func TestSqlLiteral(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_varchar.ToType(), mp)

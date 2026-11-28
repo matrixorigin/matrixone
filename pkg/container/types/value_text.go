@@ -17,17 +17,21 @@ package types
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
 
 // The text of a value. ValueText is the one formatting of a single value as
 // text: logs, debug and dump output, duplicate-key and other error messages
 // all use it, and AppendSQLLiteral builds on it. A value is what
 // vector.GetAny returns for its type: the Go element type for a fixed-size
-// type, []byte for a varlena one. Adding a type means adding its case here;
+// type, []byte for a varlena one. The forms vector.ExportValue returns are
+// accepted too: a bytejson.ByteJson for json, a []T for a numeric vector. Adding a type means adding its case here;
 // TestValueTextCoversTypeOps (in package vector) fails until it is added. See
 // docs/design/20261126-type-vft.md.
 
@@ -102,19 +106,22 @@ func AppendValueText(buf []byte, t Type, v any, loc *time.Location) []byte {
 		b := v.(Blockid)
 		return append(buf, b.String()...)
 	case T_json:
+		if j, ok := v.(bytejson.ByteJson); ok {
+			return append(buf, j.String()...)
+		}
 		return append(buf, DecodeJson(v.([]byte)).String()...)
 	case T_array_float32:
-		return append(buf, BytesToArrayToString[float32](v.([]byte))...)
+		return appendArrayText[float32](buf, v)
 	case T_array_float64:
-		return append(buf, BytesToArrayToString[float64](v.([]byte))...)
+		return appendArrayText[float64](buf, v)
 	case T_array_bf16:
-		return append(buf, BytesToArrayToString[BF16](v.([]byte))...)
+		return appendArrayText[BF16](buf, v)
 	case T_array_float16:
-		return append(buf, BytesToArrayToString[Float16](v.([]byte))...)
+		return appendArrayText[Float16](buf, v)
 	case T_array_int8:
-		return append(buf, BytesToArrayToString[int8](v.([]byte))...)
+		return appendArrayText[int8](buf, v)
 	case T_array_uint8:
-		return append(buf, BytesToArrayToString[uint8](v.([]byte))...)
+		return appendArrayText[uint8](buf, v)
 	case T_array_float8, T_array_float4:
 		text, err := BlockScaledToString(v.([]byte))
 		if err != nil {
@@ -130,24 +137,50 @@ func AppendValueText(buf []byte, t Type, v any, loc *time.Location) []byte {
 	}
 }
 
-// AppendSQLLiteral appends v, a value of type t, as a SQL literal that reads
-// back as the same value; a nil v is NULL. Numbers and booleans are bare,
-// bit and binary values are hex literals, block-scaled vectors are their
-// exact JSON cell, and every other value is its ValueText in single quotes
-// with backslashes and quotes escaped. Timestamps are written in loc, or in
-// time.Local when loc is nil.
+// AppendSQLLiteral appends v, a value of type t, as a portable SQL literal
+// (one a MySQL server reads too) that reads back as the same value; a nil v
+// is NULL. Numbers, booleans and ENUM ordinals are bare, bit and binary
+// values are hex literals, block-scaled vectors are their exact JSON cell,
+// and every other value is its ValueText in single quotes with backslashes
+// and quotes escaped. Timestamps are written in loc, or in time.Local when
+// loc is nil.
 func AppendSQLLiteral(buf []byte, t Type, v any, loc *time.Location) ([]byte, error) {
+	return appendSQLLiteral(buf, t, v, loc, false)
+}
+
+// AppendMOSQLLiteral is AppendSQLLiteral for SQL that MatrixOne runs: a
+// timestamp, and a NaN or infinite float, is written as the BIT_CAST of its
+// encoding, which is exact and independent of the session time zone.
+func AppendMOSQLLiteral(buf []byte, t Type, v any) ([]byte, error) {
+	return appendSQLLiteral(buf, t, v, time.UTC, true)
+}
+
+func appendSQLLiteral(buf []byte, t Type, v any, loc *time.Location, mo bool) ([]byte, error) {
 	if v == nil {
 		return append(buf, "NULL"...), nil
 	}
 	switch {
-	case t.Oid == T_bool, t.Oid.IsInteger(), t.Oid.IsFloat():
+	case t.Oid == T_float64:
+		if f := v.(float64); mo && (math.IsNaN(f) || math.IsInf(f, 0)) {
+			raw := EncodeFloat64(&f)
+			return appendBitCast(buf, raw, "DOUBLE"), nil
+		}
 		return AppendValueText(buf, t, v, loc), nil
+	case t.Oid.IsFloat():
+		if f := floatValue32(t, v); mo && (math.IsNaN(float64(f)) || math.IsInf(float64(f), 0)) {
+			raw := EncodeFloat32(&f)
+			return appendBitCast(buf, raw, "FLOAT"), nil
+		}
+		return AppendValueText(buf, t, v, loc), nil
+	case t.Oid == T_bool, t.Oid.IsInteger(), t.Oid == T_enum:
+		return AppendValueText(buf, t, v, loc), nil
+	case t.Oid == T_timestamp && mo:
+		ts := v.(Timestamp)
+		return appendBitCast(buf, EncodeTimestamp(&ts), "TIMESTAMP("+strconv.Itoa(int(t.Scale))+")"), nil
 	case t.Oid == T_bit:
 		value := v.(uint64)
 		byteLength := min(max((t.Width+7)/8, 1), 8)
-		b := EncodeUint64(&value)[:byteLength]
-		b = slices.Clone(b)
+		b := slices.Clone(EncodeUint64(&value)[:byteLength])
 		slices.Reverse(b)
 		return appendHexLiteral(buf, b), nil
 	case t.Oid == T_binary, t.Oid == T_varbinary, t.Oid == T_blob,
@@ -162,6 +195,38 @@ func AppendSQLLiteral(buf []byte, t Type, v any, loc *time.Location) ([]byte, er
 	default:
 		return appendQuoted(buf, string(AppendValueText(nil, t, v, loc))), nil
 	}
+}
+
+// floatValue32 is a float32 or low-precision float value as a float32.
+func floatValue32(t Type, v any) float32 {
+	switch t.Oid {
+	case T_bf16:
+		return v.(BF16).ToFloat32()
+	case T_float16:
+		return v.(Float16).ToFloat32()
+	case T_float8:
+		return v.(Float8).ToFloat32()
+	case T_float4:
+		return v.(Float4).ToFloat32()
+	default:
+		return v.(float32)
+	}
+}
+
+// appendBitCast appends BIT_CAST(UNHEX('<raw>') AS <typ>).
+func appendBitCast(buf, raw []byte, typ string) []byte {
+	buf = append(buf, "bit_cast(unhex('"...)
+	buf = hex.AppendEncode(buf, raw)
+	buf = append(buf, "') AS "...)
+	buf = append(buf, typ...)
+	return append(buf, ')')
+}
+
+func appendArrayText[T ArrayElement](buf []byte, v any) []byte {
+	if a, ok := v.([]T); ok {
+		return append(buf, ArrayToString(a)...)
+	}
+	return append(buf, BytesToArrayToString[T](v.([]byte))...)
 }
 
 func appendHexLiteral(buf, b []byte) []byte {

@@ -164,7 +164,7 @@ func TestVecValueToString_SQLLikeFormatting(t *testing.T) {
 	encoded, err := types.EncodeJson(jsonValue)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendBytes(jsonVec, encoded, false, mp))
-	require.Equal(t, string(encoded), vecValueToString(jsonVec, 0))
+	require.Equal(t, `{"a": 1}`, vecValueToString(jsonVec, 0))
 
 	nullVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer nullVec.Free(mp)
