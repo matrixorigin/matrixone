@@ -18,6 +18,12 @@ Add this section to the CN configuration. `native-config-path` names the
 Sirius YAML configuration; its GPU and pinned-host budgets must leave enough
 room for every admitted input window and the result window.
 
+On an NVIDIA DGX Spark (GB10), set `native-config-path` below to the absolute
+path of the [DGX Spark profile](../../etc/launch/sirius-dgx-spark.yaml) on the
+CN host. It budgets 48 GiB for GPU memory and 32 GiB for pinned host memory.
+Both draw from the machine's 128 GB of unified memory. On other hardware,
+size the budgets for its memory capacity and leave room for MatrixOne and the OS.
+
 ```toml
 [cn.sirius]
 enabled = true
