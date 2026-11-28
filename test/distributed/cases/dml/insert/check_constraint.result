@@ -433,4 +433,28 @@ delete from fk_outgoing_tuple_parent where id = 1;
 select id, pid, g, b from fk_outgoing_tuple_child;
 id    pid    g    b
 10    NULL    99    NULL
+create table fk_zero_parent(id int primary key);
+create table fk_zero_ref(g double, tenant int, primary key(g, tenant));
+create table fk_zero_child(
+id int primary key, pid int, tenant int,
+g double generated always as (if(pid is null, cast('-0' as double), cast('0' as double))) stored,
+key idx_zero_g(g),
+foreign key(pid) references fk_zero_parent(id) on delete set null,
+foreign key(g, tenant) references fk_zero_ref(g, tenant)
+);
+insert into fk_zero_parent values (1), (2);
+insert into fk_zero_ref values (0, 3);
+insert into fk_zero_child(id, pid, tenant) values (10, 1, 3), (20, 2, 3);
+replace into fk_zero_parent values (1);
+not supported: REPLACE foreign key action changing an indexed generated column
+select id, pid from fk_zero_child order by id;
+id    pid
+10    1
+20    2
+delete from fk_zero_parent where id = 1;
+select id, pid, cast(serial_full(g) = serial_full(cast('-0' as double)) as unsigned) as negative_zero
+from fk_zero_child force index(idx_zero_g) where g = 0 order by id;
+id    pid    negative_zero
+10    NULL    1
+20    2    0
 drop database check_constraint_test;

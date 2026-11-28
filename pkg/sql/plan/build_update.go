@@ -526,7 +526,10 @@ func appendGeneratedOutgoingFKChecks(
 			}
 			nullableParts = append(nullableParts, isNull)
 			if rowPositions[i] != i {
-				equal, err := bindGeneratedKeyEqual(ctx, DeepCopyExpr(projection[i]), DeepCopyExpr(final), &col.Typ)
+				// Like ordinary FK checks, use SQL equality, not the index encoding.
+				equal, err := BindFuncExprImplByPlanExpr(ctx, "<=>", []*Expr{
+					DeepCopyExpr(projection[i]), DeepCopyExpr(final),
+				})
 				if err != nil {
 					return -1, err
 				}
@@ -557,7 +560,9 @@ func appendGeneratedOutgoingFKChecks(
 	return builder.appendDMLRowFilter(bindCtx, last, assertions, projection), nil
 }
 
-func bindGeneratedKeyEqual(ctx context.Context, oldValue, newValue *Expr, typ *Type) (*Expr, error) {
+// bindGeneratedPhysicalKeyEqual checks whether the existing encoded key can
+// stay in place when this write path cannot maintain the index.
+func bindGeneratedPhysicalKeyEqual(ctx context.Context, oldValue, newValue *Expr, typ *Type) (*Expr, error) {
 	keys := []*Expr{oldValue, newValue}
 	for i, key := range keys {
 		var err error
@@ -582,7 +587,7 @@ func appendUnchangedGeneratedKeyCheck(
 	projection := getProjectionByLastNodeWithTag(builder, last, rowTag)
 	value := generatedUpdateExpr(builder, col, projection, rowPositions, false)
 	ctx := builder.GetContext()
-	unchanged, err := bindGeneratedKeyEqual(ctx, DeepCopyExpr(projection[colIdx]), value, &col.Typ)
+	unchanged, err := bindGeneratedPhysicalKeyEqual(ctx, DeepCopyExpr(projection[colIdx]), value, &col.Typ)
 	if err != nil {
 		return -1, err
 	}
