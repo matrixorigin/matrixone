@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'c613f57e07c79bb54a808376e82fd151fe89d015' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '88b681b1cf9ffa68aeaaee9e07a87f1602baa90f' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -129,7 +129,7 @@ jobs:
         name: Validate the fresh read-only capacity receipt before dispatch
         env:
           TRIAL_CAPACITY: >-
-            {"captured_at":1795866065,"pools":[{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0}]}
+            {"captured_at":1795866267,"pools":[{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0}]}
         run: |
           PYTHONPATH="$GITHUB_WORKSPACE/fixed-ci/scripts" python3 - <<'PY'
           import json, os, time
@@ -240,3 +240,22 @@ jobs:
           name: ut-coverage-combined-skips-${{ github.run_id }}-${{ github.run_attempt }}
           path: combined-skip-manifest.json
           if-no-files-found: error
+  verify:
+    name: Require both UT groups and an uploaded merged profile
+    needs: [authorize, coverage, merge]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Reject incomplete or skipped trials
+        env:
+          AUTH: ${{ needs.authorize.result }}
+          COVERAGE: ${{ needs.coverage.result }}
+          MERGE: ${{ needs.merge.result }}
+          PROFILE: ${{ needs.merge.outputs.artifact }}
+        run: |
+          set -euo pipefail
+          if [[ "$AUTH" != success || "$COVERAGE" != success || "$MERGE" != success || -z "$PROFILE" ]]; then
+            printf '::error::Coverage trial incomplete (authorization=%s, coverage=%s, merge=%s).\n' "$AUTH" "$COVERAGE" "$MERGE"
+            exit 1
+          fi
