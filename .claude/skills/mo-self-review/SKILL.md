@@ -49,6 +49,10 @@ These rules apply to Codex, Claude, and every other compatible reviewing agent.
   abstractions without useful callers. Added complexity must earn its runtime
   and maintenance cost through concrete functionality, correctness, robustness
   or performance; avoid speculative generality and over-engineering.
+- Type dispatch: a switch or `if` chain over (almost) all type ids outside
+  `pkg/container/types`/`pkg/container/vector` is a finding; route it through
+  the shared operation. So is any type, scale or constness branch inside a
+  per-row vector loop; it must be resolved once before the loop.
 - Test real entry points, boundaries and reachable unhappy paths with independent
   oracles and minimal fixtures. Reject duplicated setup, implementation-mirroring
   assertions and test volume that adds no distinct behavioral proof.
