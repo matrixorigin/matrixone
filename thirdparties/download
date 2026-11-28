@@ -33,6 +33,7 @@ max_time=${MO_DOWNLOAD_MAX_TIME_SECONDS:-120}
 max_bytes=${MO_DOWNLOAD_MAX_BYTES:-134217728}
 retry_delay=${MO_DOWNLOAD_RETRY_DELAY_SECONDS:-1}
 fallback_url=${MO_DOWNLOAD_FALLBACK_URL:-}
+prebuilt_file=${MO_DOWNLOAD_PREBUILT_FILE:-}
 curl_bin=${MO_DOWNLOAD_CURL_BIN:-curl}
 
 case "$url" in
@@ -123,11 +124,6 @@ if [ -f "$destination" ] && verify_file "$destination"; then
 	exit 0
 fi
 
-command -v "$curl_bin" >/dev/null 2>&1 || {
-	echo "curl command not found: $curl_bin" >&2
-	exit 2
-}
-
 destination_dir=$(dirname "$destination")
 [ -d "$destination_dir" ] || {
 	echo "destination directory does not exist: $destination_dir" >&2
@@ -144,16 +140,14 @@ trap 'exit 129' HUP
 trap 'exit 143' TERM
 tmp=$(mktemp "${destination}.download.XXXXXX")
 
-# curl versions before 8.4 only honor --max-filesize when the server declares
-# Content-Length. A POSIX file-size limit also bounds chunked/unknown-length
-# responses. The checksum/byte verification below enforces the exact limit;
-# ulimit has the POSIX-mandated 512-byte granularity.
+# Bound writes from both local and HTTPS sources. The final byte check
+# enforces the exact limit below the 512-byte ulimit granularity.
 max_file_blocks=$((max_bytes / 512))
 if [ $((max_bytes % 512)) -ne 0 ]; then
 	max_file_blocks=$((max_file_blocks + 1))
 fi
 
-run_curl() (
+limit_file_size() {
 	current_file_blocks=$(ulimit -f)
 	case "$current_file_blocks" in
 		unlimited)
@@ -170,7 +164,33 @@ run_curl() (
 			fi
 			;;
 	esac
+}
 
+publish_verified() {
+	if ! verify_file "$tmp"; then
+		echo "$verification_error" >&2
+		exit 1
+	fi
+	chmod 0644 "$tmp"
+	mv -f "$tmp" "$destination"
+	echo "$1: $destination"
+}
+
+if [ -f "$prebuilt_file" ] && [ -r "$prebuilt_file" ]; then
+	# Never publish incomplete bytes or retry an invalid preloaded artifact.
+	(limit_file_size; cat < "$prebuilt_file" > "$tmp")
+	publish_verified "using verified prebuilt dependency"
+	exit 0
+fi
+
+command -v "$curl_bin" >/dev/null 2>&1 || {
+	echo "curl command not found: $curl_bin" >&2
+	exit 2
+}
+
+run_curl() (
+	# Older curl only checks --max-filesize when Content-Length is available.
+	limit_file_size
 	exec "$curl_bin" --disable --fail --location --show-error \
 		--proto '=https' --proto-redir '=https' \
 		--connect-timeout "$connect_timeout" --max-time "$max_time" \
@@ -236,11 +256,4 @@ if [ "$status" -ne 0 ]; then
 	echo "dependency download failed with curl exit code $status" >&2
 	exit 1
 fi
-if ! verify_file "$tmp"; then
-	echo "$verification_error" >&2
-	exit 1
-fi
-
-chmod 0644 "$tmp"
-mv -f "$tmp" "$destination"
-echo "downloaded and verified: $destination"
+publish_verified "downloaded and verified"
