@@ -23,6 +23,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,6 +135,71 @@ func TestReview6095AuthoredPaginationSortBindingWitness(t *testing.T) {
 			// the ordinary multipage composition: inner [2,1] (local b asc),
 			// then outer order-by-a limit 1 -> [1].
 			probe(t, "two stage multipage", "select a from ((("+r6095WithAB+" (select a from x) order by b limit 2)) order by a limit 1) d3", []int{1})
+		})
+		t.Run("inner_with_subject_witness_enclosing_zero", func(t *testing.T) {
+			// Reviews 6096924595/6096934987: the pagination subject owns an
+			// inner WITH (y) while the local sort name b belongs to x. The
+			// trailing y-declaration must not block the composed page: b
+			// binds x.b regardless of an enclosing same-spelling b.
+			probe(t, "inner WITH witness o.b=0", "select ((with x as (select 1 as a, 2 as b union all select 2 as a, 1 as b) (with y as (select 0 as z) select a from x) order by (case when b = 0 then a else -a end) limit 2) limit 1) from (select 0 as b) o", []int{2})
+		})
+		t.Run("inner_with_subject_witness_enclosing_three", func(t *testing.T) {
+			probe(t, "inner WITH witness o.b=3", "select ((with x as (select 1 as a, 2 as b union all select 2 as a, 1 as b) (with y as (select 0 as z) select a from x) order by (case when b = 0 then a else -a end) limit 2) limit 1) from (select 3 as b) o", []int{2})
+		})
+		t.Run("inner_with_subject_witness_no_enclosing", func(t *testing.T) {
+			// Without any enclosing b the same composition must still sort
+			// by authored x.b, not fail with an unknown-column error.
+			probe(t, "inner WITH witness no outer", "select ((with x as (select 1 as a, 2 as b union all select 2 as a, 1 as b) (with y as (select 0 as z) select a from x) order by (case when b = 0 then a else -a end) limit 2) limit 1)", []int{2})
+		})
+		t.Run("trailing_order_after_own_limit", func(t *testing.T) {
+			// Inline 4726363541: a clause-bearing WITH subject (its own LIMIT)
+			// followed by an enclosing ORDER BY b must keep the authored
+			// binding and expose exactly one result column a: [2, 1].
+			probe(t, "trailing order after own limit", "(with x as (select 1 as a, 2 as b union all select 2 as a, 1 as b) select a from x limit 2) order by b", []int{2, 1})
+		})
+		t.Run("qualified_outer_correlation_zero", func(t *testing.T) {
+			// A genuinely qualified outer reference (o.b) must keep binding
+			// the enclosing scope even though an authored local b also
+			// exists: the winner flips with the outer value alone.
+			probe(t, "qualified outer correlation b=0", "select ((with x as (select 1 as a, 2 as b union all select 2 as a, 1 as b) (select a from x) order by (case when o.b = 0 then a else -a end) limit 2) limit 1) from (select 0 as b) o", []int{1})
+		})
+		t.Run("qualified_outer_correlation_three", func(t *testing.T) {
+			probe(t, "qualified outer correlation b=3", "select ((with x as (select 1 as a, 2 as b union all select 2 as a, 1 as b) (select a from x) order by (case when o.b = 0 then a else -a end) limit 2) limit 1) from (select 3 as b) o", []int{2})
+		})
+		t.Run("enclosing_limit_only_homonym_containment", func(t *testing.T) {
+			// A REAL same-name shadowing discriminator with deterministic
+			// output: the outer query and the region both declare x. The
+			// region orders its own rows by its local b (5 then 3), and the
+			// pure enclosing LIMIT stage keeps exactly one - [5] proves the
+			// region's FROM binds the INNER declaration (the outer same-name
+			// row would be 99). The plan-level fallback containment itself
+			// (hostEnclosingWith before the wrap) is discriminated by
+			// TestEnclosingAuthoredPagesComposeAtTheWithTerminal and
+			// TestEnclosingStagesStayOutsideTheWithRegion; this public SQL
+			// control pins the compatible row contract on the same route.
+			probe(t, "pure enclosing limit same-name", "select a from ((with x as (select 99 as a, 1 as b) ((with x as (select 3 as a, 2 as b union all select 5 as a, 1 as b) (select a from x) order by b)) limit 1)) d", []int{5})
+		})
+		t.Run("enclosing_nonadopted_order_limit_keeps_scope_outside", func(t *testing.T) {
+			// A non-adopted enclosing ORDER+LIMIT stage must not acquire the
+			// region's CTE scope: referencing the with-declared relation by
+			// qualified name there stays outside its FROM contract and yields
+			// the established typed error (20301 missing FROM-clause entry),
+			// in the published and corrected behavior alike.
+			stmt := "select a from ((with ox as (select 99 as a, 1 as b) ((with x as (select 1 as a, 2 as b union all select 2 as a, 1 as b) (select a from x) order by b limit 2)) order by ox.b limit 1)) d"
+			_, err := mysql.ParseOne(context.Background(), stmt, 1)
+			require.NoError(t, err, "the statement must parse; the contract discrimination lives in binding")
+			pdb, pdbErr := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/r6095_sort_db?multiStatements=true", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, pdbErr)
+			defer pdb.Close()
+			pconn, pconnErr := pdb.Conn(rootCtx)
+			require.NoError(t, pconnErr)
+			defer pconn.Close()
+			pctx, pcancel := context.WithTimeout(rootCtx, 20*time.Second)
+			defer pcancel()
+			_, qerr := pconn.ExecContext(pctx, stmt)
+			require.Error(t, qerr, "the qualified enclosing sort must stay outside the region's WITH-WITHOUT-FROM contract: the failure is the contract, not an accident")
+			require.ErrorContains(t, qerr, "20301", "the rejection must keep the established MySQL error number for the missing FROM-clause entry")
+			require.ErrorContains(t, qerr, "missing FROM-clause entry", "the rejection must keep the established typed message; the full published and corrected text is: Error 20301 (HY000): invalid input: missing FROM-clause entry for table 'ox'")
 		})
 	})
 }

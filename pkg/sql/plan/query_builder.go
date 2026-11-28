@@ -6739,19 +6739,32 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 	// enclosing query - silently choosing by the outer column - or fails to
 	// resolve outright. Adopting the clauses onto the cloned chain's
 	// terminal select keeps the authored binding exactly like the inner
-	// spelling, while any clause-bearing or WITH-owning subject still takes
-	// the ordinary derived-page wrap below, and truly correlated references,
-	// aliases, qualified names and ordinals keep their existing resolution.
-	// No hidden output columns are introduced: the subject's projection
-	// stays precisely what it authored.
+	// spelling. A WITH declaration carried anywhere on the subject chain
+	// stays attached to its authored position in the clone - the reviews'
+	// inner-WITH subject keeps composing with its own scope while any
+	// clause-bearing subject still takes the ordinary derived-page wrap
+	// below - and truly correlated references, aliases, qualified names and
+	// ordinals keep their existing resolution. No hidden output columns are
+	// introduced: the subject's projection stays precisely what it authored.
 	adoptAuthoredPageClauses := func(subject *tree.Select, limit *tree.Limit, orderBy tree.OrderBy, capture bool) (*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
 		if subject == nil {
 			return nil, nil, false
 		}
+		// Reviews 6096924595/6096934987: an ORDER-BY-only stage enclosing a
+		// subject whose top level carries its own LIMIT composes exactly the
+		// base's single flattened clause set - order first, then the
+		// subject's own LIMIT - at the subject's own page level, WITH its
+		// declaration attached, instead of deriving the sort's scope away
+		// through a synthetic page that hides the authored FROM.
+		ownLimitCompose := limit == nil && len(orderBy) > 0 &&
+			subject.Limit != nil && len(subject.OrderBy) == 0
 		chk := subject
 		for {
-			if chk.Limit != nil || len(chk.OrderBy) > 0 || chk.With != nil ||
-				chk.IntoVars != nil || chk.Ep != nil || chk.RankOption != nil ||
+			if (chk.Limit != nil || len(chk.OrderBy) > 0) &&
+				!(ownLimitCompose && chk == subject) {
+				return nil, nil, false
+			}
+			if chk.IntoVars != nil || chk.Ep != nil || chk.RankOption != nil ||
 				chk.TimeWindow != nil || chk.SelectLockInfo != nil {
 				return nil, nil, false
 			}
@@ -6764,6 +6777,10 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 		content, memo := cloneTreeSelectCorrespondence(subject, capture)
 		if content == nil {
 			return nil, nil, false
+		}
+		if ownLimitCompose {
+			content.OrderBy = orderBy
+			return content, memo, true
 		}
 		terminal := content
 		for {
@@ -6779,36 +6796,43 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 	}
 	enclosingBoundary := len(enclosing)
 	for i := len(stages) - 1; i >= 0; i-- {
-		if len(enclosing) > 0 && i < enclosingBoundary && s.With != nil && !withHosted {
+		limit, orderBy := stages[i].limit, stages[i].orderBy
+		hostEnclosingWith := func() {
 			// The WITH stays on its terminal region: a clause-free carrier
 			// hosted here, where the WITH-bearing composition ends and just
 			// before the first enclosing page applies, keeps the CTE scope
 			// inside. The enclosing pages wrap around the carrier in their
 			// authored order, so their ORDER BY and LIMIT expressions keep
 			// resolving in the outer scope and never acquire inner CTE
-			// visibility.
-			carrier := &tree.Select{
-				Select: &tree.SelectClause{
-					Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
-					From: &tree.From{
-						Tables: tree.TableExprs{
-							&tree.AliasedTableExpr{
-								Expr: &tree.ParenTableExpr{Expr: inner},
-								As:   tree.AliasClause{Alias: tree.Identifier("ordinary_cte_page_withregion")},
+			// visibility. Hosting is a no-op once composed, and reviews
+			// 6096924595/6096934987 keep it AFTER the ORDER-STAGE adoption
+			// attempt: a successfully adopted subject already composes with
+			// its own declaration attached and needs no distinct owner.
+			if len(enclosing) > 0 && i < enclosingBoundary && s.With != nil && !withHosted {
+				carrier := &tree.Select{
+					Select: &tree.SelectClause{
+						Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
+						From: &tree.From{
+							Tables: tree.TableExprs{
+								&tree.AliasedTableExpr{
+									Expr: &tree.ParenTableExpr{Expr: inner},
+									As:   tree.AliasClause{Alias: tree.Identifier("ordinary_cte_page_withregion")},
+								},
 							},
 						},
 					},
-				},
-				With: s.With,
+					With: s.With,
+				}
+				inner = carrier
+				pages = append(pages, carrier)
+				withHosted = true
 			}
-			inner = carrier
-			pages = append(pages, carrier)
-			withHosted = true
 		}
-		limit, orderBy := stages[i].limit, stages[i].orderBy
 		if limit == nil && len(orderBy) == 0 {
 			// A pure grouping wrapper without its own clauses is already the
-			// inner select's semantic: keep the body as bound.
+			// inner select's semantic: keep the body as bound, but the first
+			// boundary stage still hosts the region's WITH.
+			hostEnclosingWith()
 			continue
 		}
 		if len(orderBy) > 0 {
@@ -6867,6 +6891,13 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 				continue
 			}
 		}
+		// The adoption declined for this stage - or the stage carries only a
+		// LIMIT - so the synthetic page below will compose over the authored
+		// region. Hosting must happen before that wrap: an unhosted WITH
+		// would let the tail attach s.With to the outermost enclosing page,
+		// placing the region's declaration outside its own scope for
+		// rebinds and captures.
+		hostEnclosingWith()
 		alias := tree.AliasClause{Alias: tree.Identifier(fmt.Sprintf("ordinary_cte_page_%d", i))}
 		wrapped := &tree.Select{
 			Select: &tree.SelectClause{
