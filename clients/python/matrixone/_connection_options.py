@@ -76,3 +76,40 @@ class TLSRequiredConnection(pymysql.connections.Connection):
 
 def connect_required_tls(dialect, record, args, params):
     return TLSRequiredConnection(*args, **params)
+
+
+# Execution option for checkouts that must run statements in server autocommit
+# (standalone DDL, MERGE/PICK): no server BEGIN is sent for them.
+STATEMENT_AUTOCOMMIT = 'matrixone_statement_autocommit'
+
+
+def install_server_transaction_begin(engine, autocommit):
+    """Give each logical SQLAlchemy transaction a real server transaction.
+
+    With physical DBAPI autocommit on, SQLAlchemy's logical begin sends nothing
+    to the server, so every statement commits immediately and a later rollback
+    (``engine.begin()`` failure, ``client.session()`` error after a manual
+    commit) cannot undo it. Issue ``BEGIN`` on each logical begin instead,
+    keeping the selected physical mode for statements run outside a
+    transaction. Connections explicitly set to ``AUTOCOMMIT`` isolation keep
+    statement autocommit, as do checkouts marked with ``STATEMENT_AUTOCOMMIT``.
+    With physical autocommit off nothing is installed.
+    """
+    if not autocommit:
+        return
+    from sqlalchemy import event
+
+    target = getattr(engine, 'sync_engine', engine)
+
+    def begin(connection):
+        options = connection.get_execution_options()
+        if options.get('isolation_level') == 'AUTOCOMMIT' or options.get(STATEMENT_AUTOCOMMIT):
+            return
+        connection.exec_driver_sql('BEGIN')
+
+    event.listen(target, 'begin', begin)
+    target._matrixone_server_begin = True
+
+
+def server_begin_installed(engine):
+    return getattr(getattr(engine, 'sync_engine', engine), '_matrixone_server_begin', False)

@@ -30,6 +30,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session as SQLAlchemySession
 
+from ._connection_options import STATEMENT_AUTOCOMMIT
 from ._telemetry import observe, pool_wait
 from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .account import AccountManager
@@ -440,6 +441,7 @@ class Client(BaseMatrixOneClient):
                 ssl_key=ssl_key,
                 account=account,
                 role=role,
+                auto_commit=auto_commit,
             )
 
     def get_capabilities(self, refresh=False):
@@ -467,7 +469,7 @@ class Client(BaseMatrixOneClient):
         role: Optional[str] = None,
         charset: str = "utf8mb4",
         connection_timeout: Optional[int] = None,
-        auto_commit: bool = True,
+        auto_commit: Optional[bool] = None,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
         capability_overrides: Optional[dict] = None,
         local_infile: Optional[bool] = None,
@@ -491,7 +493,7 @@ class Client(BaseMatrixOneClient):
             role: Optional role name (will be combined with user if user doesn't contain '#' or ':')
             charset: Character set for the connection (default: utf8mb4)
             connection_timeout: Override constructor connection timeout; None inherits it
-            auto_commit: Enable autocommit (default: True)
+            auto_commit: Override constructor autocommit; None inherits it
             on_connect: Connection hook to execute after successful connection.
                        Can be:
                        - ConnectionHook instance
@@ -550,7 +552,7 @@ class Client(BaseMatrixOneClient):
             "charset": charset,
             "connect_timeout": timeout,
             "ssl_mode": ssl_mode,
-            "autocommit": auto_commit,
+            "autocommit": self.auto_commit if auto_commit is None else auto_commit,
             "local_infile": local_infile,
             "ssl_disabled": ssl_mode == "disabled",
             "ssl_verify_cert": ssl_mode == "required",
@@ -769,10 +771,11 @@ class Client(BaseMatrixOneClient):
         """Create SQLAlchemy engine with connection pooling"""
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
-        from ._connection_options import tls_options
+        from ._connection_options import install_server_transaction_begin, tls_options
         from ._local_infile import connection_options, configure_engine
 
         connect_args = {
+            'autocommit': self._connection_params.get('autocommit', self.auto_commit),
             'connect_timeout': self._connection_params['connect_timeout'],
             'read_timeout': self.query_timeout,
             'write_timeout': self.query_timeout,
@@ -811,6 +814,7 @@ class Client(BaseMatrixOneClient):
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
         adapt_engine_dialect(engine)
+        install_server_transaction_begin(engine, connect_args['autocommit'])
 
         return engine
 
@@ -1407,6 +1411,9 @@ class Client(BaseMatrixOneClient):
                 restore_autocommit = False
                 prev_autocommit = None
                 if non_transactional:
+                    # Keep this checkout in server autocommit: no engine BEGIN hook.
+                    # (SQLAlchemy 2.x updates the connection in place.)
+                    conn.execution_options(**{STATEMENT_AUTOCOMMIT: True})
                     prev_autocommit = conn.exec_driver_sql("SELECT @@autocommit").scalar()
                     if isinstance(prev_autocommit, bytes):
                         prev_autocommit = prev_autocommit.decode()
@@ -1722,6 +1729,7 @@ class Client(BaseMatrixOneClient):
         Directly constructed or wrapped sessions retain their caller's transaction
         ownership; use the client context for explicit server BEGIN and cleanup.
         """
+        from ._connection_options import server_begin_installed
         from .connection_hooks import assert_not_in_hook
 
         assert_not_in_hook(self)
@@ -1736,7 +1744,10 @@ class Client(BaseMatrixOneClient):
             # Logical SQLAlchemy begin alone does not start MatrixOne's DDL
             # transaction. Admit work only after BEGIN on this Session's owner.
             pool_wait()
-            session_wrapper.connection().exec_driver_sql('BEGIN')
+            connection = session_wrapper.connection()
+            # With physical autocommit the engine's begin hook already sent BEGIN.
+            if not server_begin_installed(self._engine):
+                connection.exec_driver_sql('BEGIN')
             yield session_wrapper
             session_wrapper.commit()
         except BaseException:
