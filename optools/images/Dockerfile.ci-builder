@@ -127,6 +127,15 @@ RUN if [ -x optools/images/ci-builder-fingerprint.sh ]; then \
       echo "thirdparties_tree=$(git rev-parse HEAD:thirdparties)" >> /mo-prebuilt/thirdparties.fingerprint; \
     fi && cat /mo-prebuilt/thirdparties.fingerprint
 
+# Expose the same verified ONNX bytes to builds whose full native fingerprint
+# differs from the image. The versioned link adds no second copy to the image.
+RUN set -eu; \
+    onnx_path=$(make -s --no-print-directory -C thirdparties onnxruntime-cache-path); \
+    onnx_lib=${onnx_path##*/}; \
+    test -s "thirdparties/install/lib/${onnx_lib}"; \
+    mkdir -p "/mo-prebuilt/onnxruntime/${onnx_path%/*}"; \
+    ln -s "/mo-prebuilt/thirdparties/install/lib/${onnx_lib}" "/mo-prebuilt/onnxruntime/${onnx_path}"
+
 # Keep only the caches and prebuilt native artifacts; dropping the source
 # tree (and its .git) keeps the nightly image as small as the caches allow.
 FROM matrixorigin/golang:1.27.0-ubuntu22.04
@@ -145,6 +154,7 @@ COPY --from=warm /root/.cache/go-build /root/.cache/go-build
 # Consumers must verify thirdparties.fingerprint matches their checkout
 # before restoring the install tree.
 COPY --from=warm /home/runner/_work/matrixone/matrixone/thirdparties/install /mo-prebuilt/thirdparties/install
+COPY --from=warm /mo-prebuilt/onnxruntime /opt/matrixone/onnxruntime
 COPY --from=warm /mo-prebuilt/thirdparties.fingerprint /mo-prebuilt/thirdparties.fingerprint
 COPY --from=warm /mo-prebuilt/warm-status /mo-prebuilt/warm-status
 COPY --from=warm /mo-prebuilt/go-cache-manifest.json /mo-prebuilt/go-cache-manifest.json
