@@ -2312,7 +2312,10 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{
+		forcePessimisticRC: true,
+		catalogMaintenance: true,
+	})
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")

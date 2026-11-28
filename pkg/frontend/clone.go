@@ -309,6 +309,7 @@ func lockDataBranchCloneSource(
 			lock.LockMode_Shared,
 			lock.Sharding_None,
 			fromAccountID,
+			false,
 		)
 	})
 }

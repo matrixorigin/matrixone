@@ -104,14 +104,22 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		return err
 	}
 
+	txnOp := proc.GetTxnOperator()
+	if !txnOp.Txn().IsPessimistic() {
+		return nil
+	}
+	// Maintenance retains metadata points across statements. Exact requests
+	// keep them as points even when the lock ledger needs multiple segments.
+	exactRows := txnOp.TxnOptions().CatalogMaintenance()
+
 	// A borrowed view, reused only after each synchronous lock call returns.
 	b := &batch.Batch{Vecs: make([]*vector.Vector, 1)}
 	b.SetVector(0, l.lockTableVec)
-	if err = l.lockMetaRows(e, proc, l.table_rel, b, accountId, l.table_table_id); err != nil {
+	if err = l.lockMetaRows(e, proc, l.table_rel, b, accountId, l.table_table_id, exactRows); err != nil {
 		return err
 	}
 	b.SetVector(0, l.lockDbVec)
-	return l.lockMetaRows(e, proc, l.database_rel, b, accountId, l.database_table_id)
+	return l.lockMetaRows(e, proc, l.database_rel, b, accountId, l.database_table_id, exactRows)
 }
 
 func (l *LockMeta) buildLockVectors(proc *process.Process, accountId uint32) error {
@@ -185,25 +193,22 @@ func (l *LockMeta) buildLockVectors(proc *process.Process, accountId uint32) err
 	return nil
 }
 
-func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engine.Relation, b *batch.Batch, accountId uint32, tableId uint64) error {
+func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engine.Relation, b *batch.Batch, accountId uint32, tableId uint64, exactRows bool) error {
 	keys := b.GetVector(0)
 	lockKeys := func(vec *vector.Vector) error {
 		b.SetVector(0, vec)
-		err := lockop.LockRows(e, proc, rel, tableId, b, 0, *vec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId)
+		err := lockop.LockRows(e, proc, rel, tableId, b, 0, *vec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId, exactRows)
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) || moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 		}
 		return err
 	}
 	service := proc.GetLockService()
-	if keys.Length() < 2 || service == nil {
+	if !exactRows || keys.Length() < 2 || service == nil {
 		return lockKeys(keys)
 	}
 	limit := max(1, int(service.GetConfig().MaxLockRowCount))
-	// Restore and the task service can revisit shared catalog metadata.
-	// Ordinary DML submits all keys so LockRows can choose the range up front.
-	txnOp := proc.GetTxnOperator()
-	if keys.Length() <= limit || !txnOp.Txn().IsPessimistic() || !txnOp.TxnOptions().CatalogMaintenance() {
+	if keys.Length() <= limit {
 		return lockKeys(keys)
 	}
 	defer b.SetVector(0, keys)

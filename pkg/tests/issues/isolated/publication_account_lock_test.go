@@ -24,9 +24,16 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,9 +70,23 @@ func openAccountLockSQL(t *testing.T, cluster embed.Cluster, index int) (*sql.DB
 	return db, cn.ServiceID()
 }
 
+// A different CN can pick a snapshot before the writer's commit is applied.
+func waitAccountLockCommit(t *testing.T, cluster embed.Cluster, writerIndex, readerIndex int) {
+	t.Helper()
+	writer, err := cluster.GetCNService(writerIndex)
+	require.NoError(t, err)
+	reader, err := cluster.GetCNService(readerIndex)
+	require.NoError(t, err)
+
+	commit := writer.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+	require.False(t, commit.IsEmpty())
+	testutils.WaitLogtailApplied(t, commit, reader)
+}
+
 func TestDropAccountWithMinimumRowLockCount(t *testing.T) {
-	cluster := startAccountLockCluster(t, 1, lockservice.Config{MaxLockRowCount: 1})
-	db, _ := openAccountLockSQL(t, cluster, 0)
+	// Force accumulated metadata keys to span multiple lock-service segments.
+	cluster := startAccountLockCluster(t, 1, lockservice.Config{MaxLockRowCount: 1, MaxFixedSliceSize: 4})
+	db, cn := openAccountLockSQL(t, cluster, 0)
 	ctx := t.Context()
 	exec := func(stmt string) {
 		t.Helper()
@@ -80,7 +101,27 @@ func TestDropAccountWithMinimumRowLockCount(t *testing.T) {
 	}
 
 	exec("create account direct_drop admin_name 'admin' identified by '111'")
-	exec("drop account direct_drop")
+	func() {
+		// Pin the catalog entry for mo_account in another transaction. DROP
+		// first shares this point, then its final DELETE also locks the
+		// metadata for the unique index.
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeUint32(0)
+		packer.EncodeStringType([]byte(catalog.MO_CATALOG))
+		packer.EncodeStringType([]byte("mo_account"))
+		serial := packer.Bytes()
+		packer.Reset()
+		packer.EncodeStringType(serial)
+		service := lockservice.GetLockServiceByServiceID(cn)
+		holder := uuid.New()
+		defer func() { require.NoError(t, service.Unlock(context.Background(), holder[:], timestamp.Timestamp{})) }()
+		_, err := service.Lock(ctx, catalog.MO_TABLES_ID, [][]byte{packer.Bytes()}, holder[:], lock.LockOptions{
+			Mode: lock.LockMode_Shared, Granularity: lock.Granularity_Row,
+		})
+		require.NoError(t, err)
+		exec("drop account direct_drop")
+	}()
 	require.Zero(t, count("select count(*) from mo_catalog.mo_account where account_name='direct_drop'"))
 
 	// Cluster restore drops accounts created after the snapshot inside its own transaction.
@@ -255,6 +296,7 @@ func TestCreatePublicationBeyondLockSliceCapacity(t *testing.T) {
 	publisher, _ := openAccountLockSQL(t, cluster, 1)
 	_, err = publisher.ExecContext(ctx, "create publication wide_pub database wide_db account "+strings.Join(names, ","))
 	require.NoError(t, err)
+	waitAccountLockCommit(t, cluster, 1, 0)
 	rows, err := owner.QueryContext(ctx, `select sub_account_name from mo_catalog.mo_subs where pub_account_id=0 and pub_name='wide_pub' and status=0 order by sub_account_name`)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -353,9 +395,15 @@ func TestRestoreClusterRemotePublicationLocks(t *testing.T) {
 	restore, restoreCN := openAccountLockSQL(t, cluster, 1)
 	require.True(t, lockservice.GetLockServiceByServiceID(restoreCN).GetConfig().EnableRemoteLocalProxy)
 	exec(restore, "restore cluster {snapshot='pub_lock_snapshot'}")
+	waitAccountLockCommit(t, cluster, 1, 0)
 	var pubs, grants int
 	require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_pubs where account_id=0 and database_name='restore_pub_db' and pub_name in ('a_all','b_named')").Scan(&pubs))
 	require.NoError(t, owner.QueryRowContext(ctx, "select count(distinct pub_name) from mo_catalog.mo_subs where pub_account_id=0 and pub_name in ('a_all','b_named') and sub_account_name='restore_sub' and status=0").Scan(&grants))
 	require.Equal(t, 2, pubs)
 	require.Equal(t, 2, grants)
+
+	exec(restore, "drop account restore_sub")
+	var accounts int
+	require.NoError(t, restore.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_account where account_name='restore_sub'").Scan(&accounts))
+	require.Zero(t, accounts)
 }
