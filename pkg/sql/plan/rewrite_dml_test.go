@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,25 @@ import (
 )
 
 const pointUpdateRoleRule = "/*+ {\"rewrites\":{\"tpch.nation\":\"select n_nationkey, n_name from tpch.nation where n_regionkey = 1\"}} */ "
+
+func TestWritableRewriteSelectChecksEveryWrapper(t *testing.T) {
+	for _, tc := range []struct {
+		sql      string
+		writable bool
+	}{
+		{"((select id from db.items))", true},
+		{"((select id from db.items limit 1))", false},
+		{"(select id from db.items) limit 1", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.NotNil(t, rewriteSelectClause(stmt, false))
+			require.Equal(t, tc.writable, rewriteSelectClause(stmt, true) != nil)
+		})
+	}
+}
 
 func TestRoleRuleDMLKeepsSinglePointScan(t *testing.T) {
 	const update = "update nation set n_name = 'updated' where n_nationkey = "

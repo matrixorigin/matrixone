@@ -2627,9 +2627,6 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 // The caller supplies only statement-local scheduling text whose provenance is
 // known. Without it, EXPLAIN retains the unscoped planning path.
 func doExplainStmtWithExecutionInput(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, proc *process.Process, schedulingSQL, rawSQL string) error {
-	if err := plan2.CheckDMLRewriteExplain(reqCtx, stmt.Statement); err != nil {
-		return err
-	}
 	//1. generate the plan
 	es, err := getExplainOption(reqCtx, stmt.Options)
 	if err != nil {
@@ -2685,15 +2682,19 @@ func writeExplainResult(
 	rawSQL string,
 	sqlMode *string,
 ) error {
-	if exPlan.GetQuery() == nil {
+	query := exPlan.GetQuery()
+	if query == nil {
 		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
 	}
-	if err := plan2.ValidateUnresolvedIndexHints(reqCtx, exPlan.GetQuery()); err != nil {
+	if err := plan2.CheckDMLRewriteExplain(reqCtx, query); err != nil {
+		return err
+	}
+	if err := plan2.ValidateUnresolvedIndexHints(reqCtx, query); err != nil {
 		return err
 	}
 	txnHaveDDL := sessionTxnHaveDDL(ses)
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
+	explainQuery := explain.NewExplainQueryImpl(query)
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
@@ -2715,7 +2716,7 @@ func writeExplainResult(
 			}
 		}
 		schedulingPreview := previewQueryScheduling(
-			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, sqlMode)
+			reqCtx, ses, query, txnHaveDDL, rawSQL, sqlMode)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
 	if err = reqCtx.Err(); err != nil {

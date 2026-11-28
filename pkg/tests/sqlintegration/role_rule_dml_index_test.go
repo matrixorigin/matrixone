@@ -66,7 +66,7 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		execAdmin("grant connect on account * to " + role)
 		execAdmin("grant select, update, delete on table " + target + " to " + role)
 		execAdmin("grant select, update on table " + other + " to " + role)
-		execAdmin("alter role " + role + " add rule 'select id, amount from " + target + " where tenant = 1' on table " + target)
+		execAdmin("alter role " + role + " add rule '((select id, amount from " + target + " where tenant = 1))' on table " + target)
 		execAdmin("create user " + user + " identified by '" + password + "' default role " + role)
 
 		dsn := fmt.Sprintf("sys#%s#%s:%s@tcp(127.0.0.1:%d)/%s?interpolateParams=false", user, role, password, port, db)
@@ -89,6 +89,14 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 			var got int
 			require.NoError(t, row.Scan(&got))
 			require.Equal(t, want, got)
+		}
+		requireExplain := func(statement string) {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, statement)
+			require.NoError(t, err, statement)
+			defer rows.Close()
+			require.True(t, rows.Next(), statement)
+			require.NoError(t, rows.Err(), statement)
 		}
 		execUser := func(statement string) {
 			t.Helper()
@@ -121,8 +129,12 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 			requireCode("delete from items where id = 1 returning note", 1054)
 			requireCode("explain update items set amount = 50 where id = 1", 20101)
 			requireCode("explain analyze delete from items where id = 1", 20101)
+			requireExplain("explain update other set id = id where id = 2")
 			requireAffected("update items as i set i.amount = 50 where i.id = 2", 0)
 		}
+		requireExplain("explain analyze update other set id = id where id = -1")
+		const updateUsingRuledSource = "update other set id = id where id in (select id from items)"
+		requireCode("explain "+updateUsingRuledSource, 20101)
 
 		requireAffected("/*+ {\"rewrites\":{\""+target+"\":\"select * from "+target+" where amount < 30\"}} */ "+
 			"update items set amount = 50 where id = 3", 0)
@@ -130,8 +142,12 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		requireValue(conn.QueryRowContext(ctx, "select amount from items where id = 1"), 12)
 
 		execUser("set enable_remap_hint = 0")
-		execUser("prepare policy_update from 'update items set amount = 51 where id = 1'")
-		requireCode("explain execute policy_update", 20101)
+		execUser("set @explain_id = 2")
+		execUser("prepare ordinary_update from 'update other set id = id where id = ?'")
+		requireExplain("explain execute ordinary_update using @explain_id")
+		execUser("deallocate prepare ordinary_update")
+		execUser("prepare policy_update from 'update items set amount = 51 where id = ?'")
+		requireCode("explain execute policy_update using @explain_id", 20101)
 		execUser("deallocate prepare policy_update")
 		func() {
 			prepared, err := conn.PrepareContext(ctx, "update items set amount = ? where id = ?")
@@ -188,7 +204,7 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		requireValue(admin.QueryRowContext(ctx, "select id from "+target), 2)
 
 		// A replacement without an unambiguous base-row mapping stays readable.
-		execAdmin("alter role " + role + " add rule 'select id, amount from " + target + " limit 1' on table " + target)
+		execAdmin("alter role " + role + " add rule '((select id, amount from " + target + " limit 1))' on table " + target)
 		requireValue(conn.QueryRowContext(ctx, "select id from items"), 2)
 		requireCode("update items set amount = 60 where id = 2", 20101)
 	})

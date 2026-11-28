@@ -644,10 +644,6 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 		v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	if err := CheckDMLRewriteExplain(ctx.GetContext(), stmt); err != nil {
-		return nil, err
-	}
-
 	plan, err := BuildPlan(ctx, stmt, isPrepareStmt, planningInput)
 	if err != nil {
 		return nil, err
@@ -665,8 +661,12 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 	}
 
 	// Ensure that the plan includes a query section
-	if plan.GetQuery() == nil {
+	query := plan.GetQuery()
+	if query == nil {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "the sql query plan does not support explain.")
+	}
+	if err := CheckDMLRewriteExplain(ctx.GetContext(), query); err != nil {
+		return nil, err
 	}
 
 	return plan, nil

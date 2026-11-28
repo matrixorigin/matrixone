@@ -214,6 +214,7 @@ func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 	if err != nil {
 		return nodeID, err
 	}
+	builder.qry.HasTableRewrite = true
 	return builder.appendNode(&planpb.Node{
 		NodeType:     planpb.Node_FILTER,
 		Children:     []int32{nodeID},
@@ -279,35 +280,8 @@ func intersectRewriteColumnNames(left, right map[string]struct{}) map[string]str
 }
 
 func rewriteVisibleColumns(stmt tree.Statement, database, table string, lower int64) (map[string]struct{}, bool, bool) {
-	var selectStmt tree.SelectStatement
-	switch statement := stmt.(type) {
-	case *tree.Select:
-		if statement.With != nil || statement.RewriteOption != nil || statement.TimeWindow != nil || statement.RankOption != nil {
-			return nil, false, false
-		}
-		selectStmt = statement.Select
-	case *tree.ParenSelect:
-		selectStmt = statement.Select
-	default:
-		return nil, false, false
-	}
-	for {
-		switch statement := selectStmt.(type) {
-		case *tree.ParenSelect:
-			selectStmt = statement.Select
-		case *tree.Select:
-			if statement.With != nil || statement.RewriteOption != nil || statement.TimeWindow != nil || statement.RankOption != nil {
-				return nil, false, false
-			}
-			selectStmt = statement.Select
-		default:
-			goto projection
-		}
-	}
-
-projection:
-	clause, ok := selectStmt.(*tree.SelectClause)
-	if !ok || clause.GroupBy != nil || clause.Having != nil || len(clause.Windows) != 0 || len(clause.Exprs) == 0 {
+	clause := rewriteSelectClause(stmt, false)
+	if clause == nil {
 		return nil, false, false
 	}
 	qualifier, aliased, ok := rewriteSingleTableSource(clause, database, table, "", lower)
@@ -315,6 +289,39 @@ projection:
 		return nil, false, false
 	}
 	return rewriteProjectionColumns(clause.Exprs, database, qualifier, aliased, lower)
+}
+
+// Parentheses preserve a projection. For writable rules also prove that
+// every SELECT wrapper and the innermost clause preserve base-row identity.
+func rewriteSelectClause(stmt tree.Statement, writable bool) *tree.SelectClause {
+	for {
+		switch s := stmt.(type) {
+		case *tree.ParenSelect:
+			if s == nil {
+				return nil
+			}
+			stmt = s.Select
+		case *tree.Select:
+			if s == nil || s.With != nil || s.RewriteOption != nil || s.TimeWindow != nil || s.RankOption != nil {
+				return nil
+			}
+			if writable && (s.IsPerform || len(s.OrderBy) != 0 || s.Limit != nil ||
+				s.Ep != nil || len(s.IntoVars) != 0 || s.SelectLockInfo != nil) {
+				return nil
+			}
+			stmt = s.Select
+		case *tree.SelectClause:
+			if s == nil || s.GroupBy != nil || s.Having != nil || len(s.Windows) != 0 || len(s.Exprs) == 0 {
+				return nil
+			}
+			if writable && (s.Distinct || s.Option&^tree.QuerySpecOptionAll != 0 || len(s.IntoVars) != 0 || s.IntoExport != nil) {
+				return nil
+			}
+			return s
+		default:
+			return nil
+		}
+	}
 }
 
 func rewriteProjectionColumns(exprs tree.SelectExprs, database, qualifier string, aliased bool, lower int64) (map[string]struct{}, bool, bool) {

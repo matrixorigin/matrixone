@@ -25,17 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// CheckDMLRewriteExplain keeps the physical write image and role predicate
-// out of EXPLAIN output. Check the resolved statement for EXPLAIN EXECUTE.
-func CheckDMLRewriteExplain(ctx context.Context, stmt tree.Statement) error {
-	var rewrite *tree.RewriteOption
-	switch dml := stmt.(type) {
-	case *tree.Update:
-		rewrite = dml.RewriteOption
-	case *tree.Delete:
-		rewrite = dml.RewriteOption
+// CheckDMLRewriteExplain keeps the physical write image and bound role rules
+// out of DML EXPLAIN output, including when EXECUTE supplies a prepared plan.
+func CheckDMLRewriteExplain(ctx context.Context, query *plan.Query) error {
+	if !query.GetHasTableRewrite() {
+		return nil
 	}
-	if rewrite != nil && len(rewrite.Rewrites) != 0 {
+	switch query.StmtType {
+	case plan.Query_UPDATE, plan.Query_DELETE:
 		return rewritePrivilegeError(ctx)
 	}
 	return nil
@@ -141,15 +138,8 @@ func writableRewriteLayers(
 		if rewrite == nil {
 			return nil, nil
 		}
-		stmt, ok := rewrite.Stmt.(*tree.Select)
-		if !ok || stmt.IsPerform || stmt.With != nil || stmt.RewriteOption != nil || stmt.TimeWindow != nil ||
-			stmt.RankOption != nil || len(stmt.OrderBy) != 0 || stmt.Limit != nil ||
-			stmt.Ep != nil || len(stmt.IntoVars) != 0 || stmt.SelectLockInfo != nil {
-			return nil, nil
-		}
-		clause, ok := stmt.Select.(*tree.SelectClause)
-		if !ok || clause.Distinct || clause.Option&^tree.QuerySpecOptionAll != 0 || clause.GroupBy != nil || clause.Having != nil ||
-			len(clause.Windows) != 0 || len(clause.IntoVars) != 0 || clause.IntoExport != nil || len(clause.Exprs) == 0 {
+		clause := rewriteSelectClause(rewrite.Stmt, true)
+		if clause == nil {
 			return nil, nil
 		}
 		qualifier, aliased, ok := rewriteSingleTableSource(clause, database, table, defaultDatabase, lower)
@@ -208,13 +198,13 @@ func (builder *QueryBuilder) enableDeleteTargetRewrites(
 	return builder.enableDMLTargetRewrites(ctx, targets, nil)
 }
 
-func (ctx *BindContext) markDMLPhysicalRef(ref *tree.UnresolvedName) {
-	if ctx.dmlPhysicalRefs != nil {
-		ctx.dmlPhysicalRefs[ref] = struct{}{}
+func (bc *BindContext) markDMLPhysicalRef(ref *tree.UnresolvedName) {
+	if bc.dmlPhysicalRefs != nil {
+		bc.dmlPhysicalRefs[ref] = struct{}{}
 	}
 }
 
-func (ctx *BindContext) restrictDMLBinding(binding *Binding, visible map[string]int32) {
+func (bc *BindContext) restrictDMLBinding(binding *Binding, visible map[string]int32) {
 	binding.dmlStorageColumns = binding.colIdByName
 	binding.colIdByName = make(map[string]int32, len(visible))
 	for i, name := range binding.cols {
@@ -223,8 +213,8 @@ func (ctx *BindContext) restrictDMLBinding(binding *Binding, visible map[string]
 			continue
 		}
 		binding.colIsHidden[i] = true
-		if ctx.bindingByCol[name] == binding {
-			delete(ctx.bindingByCol, name)
+		if bc.bindingByCol[name] == binding {
+			delete(bc.bindingByCol, name)
 		}
 	}
 }
@@ -252,6 +242,7 @@ func (builder *QueryBuilder) applyDMLTargetRewrite(
 		scan.GetObjRef().GetPubInfo() != nil || binding == nil || binding.tableID != target.tableID {
 		return 0, rewritePrivilegeError(builder.GetContext())
 	}
+	builder.qry.HasTableRewrite = true
 	scan.NotCacheable = true
 
 	for i, layer := range target.layers {

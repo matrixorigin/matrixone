@@ -1942,6 +1942,10 @@ message Query {
   // envelope lets prepared and ordinary plan-cache reuse validate the shared
   // catalog namespace without walking or reinterpreting user source.
   repeated RoutinePlanDependency routine_dependencies = 25;
+
+  // A table rewrite participated in binding this query. Carry this through
+  // plan reuse so DML EXPLAIN can protect the bound policy and row image.
+  bool has_table_rewrite = 26;
 }
 
 message TransationControl {
