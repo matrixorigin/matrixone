@@ -124,6 +124,44 @@ test('API failure falls back to full and both sides of pagination check the revi
   }
 });
 
+test('scope planning recovers a confirmed throttle and still checks the live revision', async () => {
+  const rateLimit = Object.assign(new Error('API rate limit exceeded for installation'), {
+    status: 403, response: { headers: { 'retry-after': '60' } },
+  });
+  for (const stale of [false, true]) {
+    const fixture = client();
+    const get = fixture.github.rest.pulls.get;
+    const waits = [];
+    let reads = 0;
+    fixture.github.rest.pulls.get = async (...args) => {
+      if (++reads === 1) throw rateLimit;
+      if (stale && reads === 3) return { data: { ...fixture.pr, head: { sha: 'new' } } };
+      return get(...args);
+    };
+    const result = resolveScope({ ...fixture, sleep: async ms => waits.push(ms) });
+    if (stale) await assert.rejects(result, /revision changed while classifying/);
+    else assert.deepEqual(await result, { scope: 'ut', sdk_required: false });
+    assert.deepEqual(waits, [60_000]);
+    assert.equal(reads, 3);
+  }
+
+  for (const [error, expectedWaits, expectedReads] of [
+    [rateLimit, [60_000], 2],
+    [Object.assign(new Error('Resource not accessible by integration'), { status: 403 }), [], 1],
+  ]) {
+    const fixture = client();
+    const waits = [];
+    let reads = 0;
+    fixture.github.rest.pulls.get = async () => {
+      reads++;
+      throw error;
+    };
+    await assert.rejects(resolveScope({ ...fixture, sleep: async ms => waits.push(ms) }), e => e === error);
+    assert.deepEqual(waits, expectedWaits);
+    assert.equal(reads, expectedReads);
+  }
+});
+
 function results() {
   const needs = Object.fromEntries(['docs-check', 'python-sdk', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-compose-ci', 'matrixone-standalone-ci',
