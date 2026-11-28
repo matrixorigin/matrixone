@@ -20,7 +20,7 @@ jobs:
       github.repository == 'matrixorigin/matrixone' && github.event_name == 'push' &&
       github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' &&
       github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
-      github.event.before == '88b681b1cf9ffa68aeaaee9e07a87f1602baa90f'
+      github.event.before == 'b9c84e9b7e036bd5278901d0c62e2c9fc68fe76a'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: ci
