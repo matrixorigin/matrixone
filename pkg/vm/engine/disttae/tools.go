@@ -106,6 +106,9 @@ func genWriteReqs(
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	if len(tn.Shards) == 0 {
+		return nil, moerr.NewServiceUnavailable(ctx, fmt.Sprintf("TN %s has no reported shard", tnID))
+	}
 
 	reqs := make([]txn.TxnRequest, 0, len(entries))
 	// Every shard's request shares one payload, marshaled straight into a
