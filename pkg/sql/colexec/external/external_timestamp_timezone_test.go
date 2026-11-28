@@ -338,8 +338,10 @@ func Test_isLegalLine_Timestamp(t *testing.T) {
 			expected:  true, // empty string is treated as null/empty and skipped
 		},
 		{
-			name:      "valid timestamp edge case - epoch",
-			timestamp: "1970-01-01 00:00:00",
+			// the probe applies the TIMESTAMP range, as the load does; the
+			// first valid second depends on time.Local, a day later does not
+			name:      "valid timestamp edge case - near the lower bound",
+			timestamp: "1970-01-02 00:00:00",
 			scale:     0,
 			expected:  true,
 		},
