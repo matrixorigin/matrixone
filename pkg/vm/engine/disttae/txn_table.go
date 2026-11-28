@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -1953,97 +1954,142 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
+// objectTombstones snapshots the logical table's files that may delete rows of
+// this object. The workspace index lock is released before reading any files.
+func (t *workspaceFlushedTombstones) objectTombstones(tableID uint64, objectID *objectio.ObjectId) []objectio.ObjectStats {
+	var tombstones []objectio.ObjectStats
+	t.forEach(tableID, func(stats objectio.ObjectStats) {
+		if stats.SortKeyZoneMap().RowidPrefixEq(objectID[:]) {
+			tombstones = append(tombstones, stats)
+		}
+	})
+	return tombstones
+}
+
+// mergeTombstoneOffsets applies persisted visibility to the old block ID before
+// its surviving rows receive new RowIDs. It leaves the input offsets untouched.
+func mergeTombstoneOffsets(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot *types.TS,
+	blockID *objectio.Blockid,
+	tombstones []objectio.ObjectStats,
+	deletes []int64,
+	scratch *[]int64,
+) ([]int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	mask := objectio.GetReusableBitmap()
+	defer mask.Release()
+
+	next := func() (*objectio.ObjectStats, error) {
+		if len(tombstones) == 0 {
+			return nil, nil
+		}
+		stats := &tombstones[0]
+		tombstones = tombstones[1:]
+		return stats, nil
+	}
+	if err := ioutil.GetTombstonesByBlockId(ctx, snapshot, blockID, next, &mask, fs); err != nil {
+		return nil, err
+	}
+	if mask.IsEmpty() {
+		return deletes, nil
+	}
+	for _, offset := range deletes {
+		mask.Add(uint64(offset))
+	}
+	offsets := mask.ToI64Array(scratch)
+	if scratch != nil {
+		*scratch = offsets
+	}
+	return offsets, nil
+}
+
+// rewriteObjectByDeletion transfers its writer and metadata to the caller
+// after Sync. Uploads remain owned by the stream until workspace publication.
 func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
 	blockDeletes map[objectio.Blockid][]int64,
-) (*batch.Batch, string, error) {
-
+	owner *colexec.LocalInsertObjects,
+) (_ *colexec.CNS3Writer, _ *batch.Batch, _ string, err error) {
 	proc := tbl.proc.Load()
-
-	var (
-		err error
-		fs  fileservice.FileService
-	)
-
-	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
-		return nil, "", err
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	if err != nil {
+		return nil, nil, "", err
 	}
 
-	s3Writer := colexec.NewCNS3DataWriter(
-		proc.Mp(), fs, tbl.tableDef, -1, false,
+	txn := tbl.getTxn()
+	var tombstones []objectio.ObjectStats
+	var snapshot types.TS
+	var offsetsScratch []int64
+	if txn.isCloneTxn {
+		tombstones = txn.flushedTombstones.objectTombstones(tbl.tableId, obj.ObjectName().ObjectId())
+		if len(tombstones) != 0 {
+			snapshot = types.TimestampToTS(txn.op.SnapshotTS())
+		}
+	}
+
+	writer := colexec.NewCNS3DataWriter(
+		proc.Mp(), fs, tbl.tableDef, -1, false, ioutil.WithObjectReservation(owner.Reserve),
 	)
-
-	defer func() { s3Writer.Close() }()
-
-	var (
-		bat      *batch.Batch
-		stats    []objectio.ObjectStats
-		fileName string
-	)
-
+	handedOff := false
 	defer func() {
-		if bat != nil {
-			bat.Clean(proc.Mp())
+		if !handedOff {
+			if closeErr := writer.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
 		}
 	}()
 
-	objectio.ForeachBlkInObjStatsList(
-		true,
-		nil,
-		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			deletes := blockDeletes[blk.BlockID]
-			slices.Sort(deletes)
-			if bat == nil {
-				bat = batch.NewWithSize(len(tbl.seqnums))
+	var rows *batch.Batch
+	defer func() {
+		if rows != nil {
+			rows.Clean(proc.Mp())
+		}
+	}()
+
+	iter := objectio.NewStatsBlkIter(&obj, nil)
+	for iter.Next() {
+		blk := iter.Entry()
+		deletes := blockDeletes[blk.BlockID]
+		if len(tombstones) != 0 {
+			deletes, err = mergeTombstoneOffsets(ctx, fs, &snapshot, &blk.BlockID, tombstones, deletes, &offsetsScratch)
+			if err != nil {
+				return nil, nil, "", err
 			}
-			bat.CleanOnlyData()
-
-			if err = blockio.CopyBlockData(
-				tbl.getTxn().proc.Ctx,
-				blk.MetaLoc[:],
-				deletes,
-				tbl.seqnums,
-				tbl.typs,
-				bat,
-				tbl.getTxn().engine.fs,
-				tbl.getTxn().proc.GetMPool(),
-			); err != nil {
-				return false
+		}
+		slices.Sort(deletes)
+		if rows == nil {
+			rows = batch.NewWithSize(len(tbl.seqnums))
+		}
+		rows.CleanOnlyData()
+		if err := blockio.CopyBlockData(ctx, blk.MetaLoc[:], deletes, tbl.seqnums, tbl.typs, rows, fs, proc.GetMPool()); err != nil {
+			return nil, nil, "", err
+		}
+		if rows.RowCount() > 0 {
+			if err := writer.Write(ctx, rows); err != nil {
+				return nil, nil, "", err
 			}
+		}
+	}
 
-			if bat.RowCount() == 0 {
-				return true
-			}
-
-			if err = s3Writer.Write(ctx, bat); err != nil {
-				return false
-			}
-
-			return true
-		},
-		obj,
-	)
-
+	stats, err := writer.Sync(ctx)
 	if err != nil {
-		return nil, fileName, err
+		return nil, nil, "", err
 	}
-
-	if stats, err = s3Writer.Sync(ctx); err != nil {
-		return nil, fileName, err
+	meta, err := writer.FillBlockInfoBat()
+	if err != nil {
+		return nil, nil, "", err
 	}
-
-	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-		return nil, fileName, err
-	}
-
+	var fileName string
 	if len(stats) != 0 {
 		fileName = stats[0].ObjectLocation().String()
 	}
-
-	ret, err := bat.Dup(proc.Mp())
-
-	return ret, fileName, err
+	handedOff = true
+	return writer, meta, fileName, nil
 }
 
 func (tbl *txnTable) Delete(

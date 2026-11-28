@@ -66,9 +66,8 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
-	// stmtBorrowed means PrepareStmt or an ExecStmt caller owns the AST; this
-	// wrapper must not return it to the AST pool. The zero value intentionally
-	// means owned so ordinary wrappers preserve their existing lifecycle.
+	// stmtBorrowed identifies ASTs owned by a prepared handle, plan cache, or
+	// ExecStmt caller. The zero value means the wrapper owns the AST.
 	stmtBorrowed bool
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
@@ -802,7 +801,7 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
+	needRebuild := prepareStmt.needsRebuild || preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
 		prepareStmt.optimizerHints != currentOptimizerHints
 
 	// Rebuild the plan when catalog schema, session temporary-table name
@@ -846,6 +845,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.optimizerHints = currentOptimizerHints
+		prepareStmt.needsRebuild = false
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.

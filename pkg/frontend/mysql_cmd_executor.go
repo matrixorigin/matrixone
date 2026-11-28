@@ -3308,6 +3308,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		execCtx.input.setSqlSourceTypes(ses, sources)
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
+			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
