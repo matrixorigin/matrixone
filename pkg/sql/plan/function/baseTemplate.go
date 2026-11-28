@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -80,6 +81,9 @@ type templateDecOut interface {
 // Scale values and null bitmap are provided for kernels that need them.
 func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[TOut](result)
 	p1 := vector.OptGetParamFromWrapper[TIn](rs, 0, parameters[0])
@@ -128,6 +132,44 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 	}
 
 	var v1, v2 []TIn
+	if c1 && c2 {
+		val1, _ := p1.GetValue(0)
+		val2, _ := p2.GetValue(0)
+		var localMP *mpool.MPool
+		if proc != nil {
+			localMP = proc.Mp()
+		}
+		if localMP == nil {
+			var err error
+			localMP, err = mpool.NewMPool("decimal_batch_arith", 0, mpool.NoFixed)
+			if err != nil {
+				return err
+			}
+			defer mpool.DeleteMPool(localMP)
+		}
+		singleNull, err := nulls.NewWithSize(1, localMP)
+		if err != nil {
+			return err
+		}
+		defer singleNull.Free()
+		var singleRes [1]TOut
+		if err := arithFn([]TIn{val1}, []TIn{val2}, singleRes[:], scale1, scale2, singleNull); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+				return moerr.NewOutOfRange(proc.Ctx, "DECIMAL", err.Error())
+			}
+			return err
+		}
+		if !singleNull.IsEmpty() {
+			rsNull.AddRange(0, uint64(length))
+			return nil
+		}
+		for i := 0; i < length; i++ {
+			if !rsNull.Contains(uint64(i)) {
+				rss[i] = singleRes[0]
+			}
+		}
+		return nil
+	}
 	if c1 {
 		val, _ := p1.GetValue(0)
 		v1 = []TIn{val}
