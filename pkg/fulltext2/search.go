@@ -430,13 +430,31 @@ func (c *phraseCursor) skipTo(target int64) {
 // position adjacency. Peak memory is O(nslots × BlockSize) — one decoded block per
 // cursor — independent of corpus size, vs the fallback's whole-posting-list materialize.
 func (s *Segment) matchPhraseCursor(slots []phraseSlot) []docTf {
+	var hits []docTf
+	s.visitExactPhrase(slots, func(ord int64, tf int) {
+		hits = append(hits, docTf{ord, tf})
+	})
+	return hits
+}
+
+func exactPhraseSlots(slots []phraseSlot) bool {
+	for _, slot := range slots {
+		if slot.star {
+			return false
+		}
+	}
+	return len(slots) > 0
+}
+
+// visitExactPhrase reports hits in ordinal order without retaining a hit list.
+func (s *Segment) visitExactPhrase(slots []phraseSlot, visit func(int64, int)) {
 	cursors := make([]*phraseCursor, len(slots))
 	defer releasePhraseCursors(cursors) // recycle block buffers, incl. the early-return path
 	rare := 0
 	for i, sl := range slots {
 		pl, ok := s.lookup(sl.term)
 		if !ok {
-			return nil // a slot no doc satisfies ⇒ the phrase can't occur
+			return // a slot no doc satisfies ⇒ the phrase can't occur
 		}
 		cursors[i] = newPhraseCursor(pl, sl.off)
 		if pl.df() < cursors[rare].tp.df() {
@@ -444,9 +462,13 @@ func (s *Segment) matchPhraseCursor(slots []phraseSlot) []docTf {
 		}
 	}
 	rc := cursors[rare]
-	var hits []docTf
 	for !rc.atEnd() {
 		d := rc.doc()
+		if len(cursors) == 1 {
+			visit(d, len(rc.positions()))
+			rc.idx++
+			continue
+		}
 		present := true
 		for j, c := range cursors {
 			if j == rare {
@@ -477,12 +499,11 @@ func (s *Segment) matchPhraseCursor(slots []phraseSlot) []docTf {
 				}
 			}
 			if cnt > 0 {
-				hits = append(hits, docTf{d, cnt})
+				visit(d, cnt)
 			}
 		}
 		rc.idx++
 	}
-	return hits
 }
 
 // idfSquared is MatrixOne's squared inverse document frequency: (log10(N/df))².
