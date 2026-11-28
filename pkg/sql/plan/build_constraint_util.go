@@ -975,6 +975,13 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 		for _, col := range tblInfo.tableDefs[defIdx].Cols {
 			colName2Idx[defIdx][col.Name] = int32(len(selectList))
 			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			bindCtx.markDMLPhysicalRef(ret)
+			if bindCtx.dmlPhysicalRefs != nil && col.GeneratedCol != nil {
+				if bindCtx.physicalGeneratedRefs == nil {
+					bindCtx.physicalGeneratedRefs = make(map[*tree.UnresolvedName]struct{})
+				}
+				bindCtx.physicalGeneratedRefs[ret] = struct{}{}
+			}
 			selectList = append(selectList, tree.SelectExpr{Expr: ret})
 		}
 	}
@@ -1006,9 +1013,10 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 			From:     fromTables,
 			Where:    node.Where,
 		},
-		OrderBy: node.OrderBy,
-		Limit:   node.Limit,
-		With:    node.With,
+		OrderBy:       node.OrderBy,
+		Limit:         node.Limit,
+		With:          node.With,
+		RewriteOption: node.RewriteOption,
 	}
 	// ftCtx := tree.NewFmtCtx(dialectType)
 	// astSelect.Format(ftCtx)

@@ -62,6 +62,7 @@ type DMLContext struct {
 	// tables and CTEs.
 	hasReadOnlySource bool
 
+	updateRewrites map[string]*dmlTargetRewrite
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	// updateTargetOrder records writable targets in the table-list binding order.
 	// MySQL evaluates repeated physical targets in this order, independently of
@@ -98,13 +99,21 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		return classifyUpdateTableResolutionError(ctx, stmt, err)
 	}
 
-	// check update field and set updateKeys
+	dmlCtx.updateRewrites = resolveDMLTargetRewrites(ctx, stmt.RewriteOption, stmt.Tables, stmt.With, dmlCtx.aliasMap, dmlCtx.tableDefs)
+
+	// Resolve SET targets using the exposed columns of each source.
 	usedTbl := make(map[string]map[string]tree.Expr)
 	updateColOrder := make(map[string][]string)
 	updateAssignments := make(map[string][]UpdateAssignment)
 	allColumns := make(map[string]map[string]bool)
 	for alias, idx := range dmlCtx.aliasMap {
 		allColumns[alias] = make(map[string]bool)
+		if target := dmlCtx.updateRewrites[alias]; target != nil && target.visible != nil {
+			for name := range target.visible {
+				allColumns[alias][name] = true
+			}
+			continue
+		}
 		for _, col := range dmlCtx.tableDefs[idx].Cols {
 			if !col.Hidden {
 				allColumns[alias][col.Name] = true

@@ -863,7 +863,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, isPrepareStmt
 	}
 	var result *Plan
 	if stmt.Where != nil {
-		result, err = returnByWhereAndBaseSQLWithPrepare(ctx, sql, stmt.Where, ddlType, isPrepareStmt)
+		result, err = buildShowWhereSelect(ctx, sql, stmt.Where, isPrepareStmt, stmt.RewriteOption)
 	} else if stmt.Like != nil {
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
@@ -1093,6 +1093,10 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
+	if err = checkShowRewriteMetadata(ctx, stmt.RewriteOption, dbName, tblName, tableDef,
+		subscription == nil && obj.GetPubInfo() == nil); err != nil {
+		return nil, err
+	}
 	ddlType := plan.DataDefinition_SHOW_INDEX
 
 	if obj.PubInfo != nil {
@@ -1175,7 +1179,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	showIndexSql := fmt.Sprintf(sql, sqlquote.String(displayTblName), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(tblName), sqlquote.String(catalog.AliasPrefix+"%"))
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)
+		return buildShowWhereSelect(ctx, showIndexSql, stmt.Where, false, stmt.RewriteOption)
 	}
 	return returnByRewriteSQL(ctx, showIndexSql, ddlType)
 }
@@ -1464,11 +1468,11 @@ func showSnapshotSpec(atTsExpr *tree.AtTimeStamp, snapshot *Snapshot) string {
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	return returnByWhereAndBaseSQLWithPrepare(ctx, baseSQL, where, ddlType, false)
+	return buildShowWhereSelect(ctx, baseSQL, where, false, nil)
 }
 
-func returnByWhereAndBaseSQLWithPrepare(ctx CompilerContext, baseSQL string,
-	where *tree.Where, ddlType plan.DataDefinition_DdlType, isPrepareStmt bool) (*Plan, error) {
+func buildShowWhereSelect(ctx CompilerContext, baseSQL string, where *tree.Where,
+	isPrepareStmt bool, rewrite *tree.RewriteOption) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
 	if err != nil {
@@ -1477,8 +1481,10 @@ func returnByWhereAndBaseSQLWithPrepare(ctx CompilerContext, baseSQL string,
 	defer newStmt.Free()
 	// The predicate belongs to the authored SHOW. Preserve its prepare mode
 	// when binding it as part of the rewritten SELECT.
-	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = where
-	return BuildPlan(ctx, newStmt, isPrepareStmt, nil)
+	selectStmt := newStmt.(*tree.Select)
+	selectStmt.Select.(*tree.SelectClause).Where = where
+	selectStmt.RewriteOption = rewrite
+	return BuildPlan(ctx, selectStmt, isPrepareStmt, nil)
 }
 
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,

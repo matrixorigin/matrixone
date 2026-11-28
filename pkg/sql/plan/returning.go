@@ -347,6 +347,9 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 		if col.Hidden || col.Name == catalog.Row_ID {
 			continue
 		}
+		if !builder.dmlReturningColumnVisible(col.Name) {
+			continue
+		}
 		pos, ok := builder.returningColPos[strings.ToLower(col.Name)]
 		if !ok || pos < 0 || int(pos) >= len(sourceSink.ProjectList) {
 			return moerr.NewInternalErrorf(builder.GetContext(), "DML RETURNING cannot locate final image column %s", col.Name)

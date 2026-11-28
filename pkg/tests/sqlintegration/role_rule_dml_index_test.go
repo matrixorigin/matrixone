@@ -1,0 +1,175 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package sqlintegration
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+
+		const (
+			db       = "role_rule_dml_index"
+			role     = "role_rule_dml_index_role"
+			user     = "role_rule_dml_index_user"
+			password = "RoleRuleIndexData01"
+			target   = db + ".items"
+			other    = db + ".other"
+		)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		admin, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer admin.Close()
+		defer cleanupSQLIntegration(t, cn,
+			"drop user if exists "+user,
+			"drop role if exists "+role,
+			"drop database if exists "+db,
+		)
+		execAdmin := func(statement string) {
+			t.Helper()
+			execSQLRequire(t, ctx, admin, statement)
+		}
+		execAdmin("create database " + db)
+		execAdmin("create table " + target + " (id int primary key, tenant int, amount int, note varchar(20))")
+		execAdmin("create index idx_tenant on " + target + "(tenant)")
+		execAdmin("create index idx_amount on " + target + "(amount)")
+		execAdmin("create index idx_expression on " + target + " ((tenant + 1))")
+		execAdmin("insert into " + target + " values (1, 1, 10, 'first'), (2, 2, 20, 'second'), (3, 1, 30, 'third')")
+		execAdmin("create table " + other + " (id int primary key)")
+		execAdmin("insert into " + other + " values (2), (3)")
+		execAdmin("create role " + role)
+		execAdmin("grant connect on account * to " + role)
+		execAdmin("grant select, update, delete on table " + target + " to " + role)
+		execAdmin("grant select, update, delete on table " + other + " to " + role)
+		execAdmin("alter role " + role + " add rule 'select id, amount from " + target + " where tenant = 1' on table " + target)
+		execAdmin("create user " + user + " identified by '" + password + "' default role " + role)
+
+		dsn := fmt.Sprintf("sys#%s#%s:%s@tcp(127.0.0.1:%d)/%s?interpolateParams=false", user, role, password, port, db)
+		client, err := sql.Open("mysql", dsn)
+		require.NoError(t, err)
+		defer client.Close()
+		conn, err := client.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		requireCode := func(statement string, code uint16) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, statement)
+			var serverErr *mysql.MySQLError
+			require.ErrorAs(t, err, &serverErr, statement)
+			require.Equal(t, code, serverErr.Number, statement)
+		}
+		requireValue := func(row *sql.Row, want int) {
+			t.Helper()
+			var got int
+			require.NoError(t, row.Scan(&got))
+			require.Equal(t, want, got)
+		}
+		execUser := func(statement string) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, statement)
+			require.NoError(t, err, statement)
+		}
+		requireAffected := func(statement string, want int) {
+			t.Helper()
+			execUser(statement)
+			requireValue(conn.QueryRowContext(ctx, "select row_count()"), want)
+		}
+
+		statistics := "select count(*) from information_schema.statistics where table_schema = '" + db + "' and table_name = 'items' and "
+		hiddenIndexes := statistics + "index_name in ('idx_tenant', 'idx_expression')"
+		visibleIndex := statistics + "index_name = 'idx_amount' and column_name = 'amount'"
+		requireValue(admin.QueryRowContext(ctx, hiddenIndexes), 2)
+		for _, enabled := range []int{0, 1} {
+			execUser(fmt.Sprintf("set enable_remap_hint = %d", enabled))
+			requireValue(conn.QueryRowContext(ctx, hiddenIndexes), 0)
+			requireValue(conn.QueryRowContext(ctx, visibleIndex), 1)
+			requireCode("show index from items", 20101)
+			execUser("show index from other")
+			requireCode("update items set amount = 50 where tenant = 1", 1054)
+			requireCode("update items set tenant = 1 where id = 1", 1054)
+			requireCode("update items set amount = 50, amount = tenant where id = 1", 1054)
+			requireCode("delete from items where tenant = 1", 1054)
+			requireCode("delete from items order by tenant limit 1", 1054)
+			requireCode("delete from items where id = 1 returning note", 1054)
+			requireAffected("update items as i set i.amount = 50 where i.id = 2", 0)
+		}
+
+		requireAffected("/*+ {\"rewrites\":{\""+target+"\":\"select * from "+target+" where amount < 30\"}} */ "+
+			"update items set amount = 50 where id = 3", 0)
+		requireAffected("update items set amount = amount + 1, amount = amount + 1 where id = 1", 1)
+		requireValue(conn.QueryRowContext(ctx, "select amount from items where id = 1"), 12)
+
+		execUser("set enable_remap_hint = 0")
+		func() {
+			prepared, err := conn.PrepareContext(ctx, "update items set amount = ? where id = ?")
+			require.NoError(t, err)
+			defer prepared.Close()
+			for _, tc := range []struct {
+				id   int
+				want int64
+			}{{2, 0}, {1, 1}} {
+				result, err := prepared.ExecContext(ctx, 51, tc.id)
+				require.NoError(t, err)
+				affected, err := result.RowsAffected()
+				require.NoError(t, err)
+				require.Equal(t, tc.want, affected, "primary key %d", tc.id)
+			}
+		}()
+		requireValue(admin.QueryRowContext(ctx, "select id from "+target+" force index (idx_amount) where amount = 51"), 1)
+		requireValue(admin.QueryRowContext(ctx, "select amount from "+target+" where id = 2"), 20)
+		func() {
+			rows, err := conn.QueryContext(ctx, "update items set amount = 52 where id = 1 returning *")
+			require.NoError(t, err)
+			defer rows.Close()
+			columns, err := rows.Columns()
+			require.NoError(t, err)
+			require.Equal(t, []string{"id", "amount"}, columns)
+			require.True(t, rows.Next())
+			var id, amount int
+			require.NoError(t, rows.Scan(&id, &amount))
+			require.Equal(t, 1, id)
+			require.Equal(t, 52, amount)
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+		}()
+
+		// Exercise legacy multi-target DELETE and then the single-table path.
+		execUser("delete i, o from items as i join other as o on i.id = o.id")
+		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+other+" where id = 2"), 1)
+		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+other+" where id = 3"), 0)
+		requireAffected("delete from items", 1)
+		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+target+" force index (idx_tenant) where tenant = 1"), 0)
+		requireValue(admin.QueryRowContext(ctx, "select id from "+target), 2)
+
+		// A replacement without an unambiguous base-row mapping stays readable.
+		execAdmin("alter role " + role + " add rule 'select id, amount from " + target + " limit 1' on table " + target)
+		requireValue(conn.QueryRowContext(ctx, "select id from items"), 2)
+		requireCode("update items set amount = 60 where id = 2", 20101)
+	})
+}

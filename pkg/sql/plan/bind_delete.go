@@ -224,8 +224,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		}
 	}
 
-	//FIXME: optimize truncate table?
-	if !stmt.HasReturning() && isUnrestrictedDelete(stmt, len(dmlCtx.tableDefs)) {
+	if err = builder.enableDeleteTargetRewrites(bindCtx, stmt, dmlCtx.aliasMap, dmlCtx.tableDefs); err != nil {
+		return 0, err
+	}
+	if len(builder.dmlRewriteTargets) == 0 && !stmt.HasReturning() && isUnrestrictedDelete(stmt, len(dmlCtx.tableDefs)) {
 		var cantrucate bool
 		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {
@@ -249,6 +251,8 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 	}
 
+	selectCtx := NewBindContext(builder, bindCtx)
+	selectCtx.dmlPhysicalRefs = bindCtx.dmlPhysicalRefs
 	var selectList []tree.SelectExpr
 	physicalGeneratedRefs := make(map[*tree.UnresolvedName]struct{})
 	colName2Idx := make([]map[string]int32, len(stmt.Tables))
@@ -259,6 +263,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		for _, col := range dmlCtx.tableDefs[defIdx].Cols {
 			colName2Idx[defIdx][col.Name] = int32(len(selectList))
 			selectExpr := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			selectCtx.markDMLPhysicalRef(selectExpr)
 			if col.GeneratedCol != nil {
 				physicalGeneratedRefs[selectExpr] = struct{}{}
 			}
@@ -296,12 +301,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			From:     fromTables,
 			Where:    stmt.Where,
 		},
-		OrderBy: stmt.OrderBy,
-		Limit:   stmt.Limit,
-		With:    stmt.With,
+		OrderBy:       stmt.OrderBy,
+		Limit:         stmt.Limit,
+		With:          stmt.With,
+		RewriteOption: stmt.RewriteOption,
 	}
 
-	selectCtx := NewBindContext(builder, bindCtx)
 	selectCtx.physicalGeneratedRefs = physicalGeneratedRefs
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {

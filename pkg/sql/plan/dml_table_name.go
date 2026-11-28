@@ -33,35 +33,37 @@ type deleteSource struct {
 func CollectDeleteSourceAliases(tableRefs tree.TableExprs) map[string]deleteSource {
 	aliases := make(map[string]deleteSource)
 	for _, ref := range tableRefs {
-		collectDeleteSourceAlias(ref, "", aliases)
+		walkDMLSourceAliases(ref, "", func(alias string, source *tree.TableName, explicit bool) {
+			aliases[alias] = deleteSource{schema: string(source.SchemaName), table: string(source.ObjectName), explicitAlias: explicit}
+		})
 	}
 	return aliases
 }
 
-func collectDeleteSourceAlias(expr tree.TableExpr, alias string, aliases map[string]deleteSource) {
+func walkDMLSourceAliases(expr tree.TableExpr, alias string, visit func(string, *tree.TableName, bool)) {
 	switch t := expr.(type) {
 	case *tree.TableName:
-		source := deleteSource{schema: string(t.SchemaName), table: string(t.ObjectName), explicitAlias: alias != ""}
-		if alias == "" {
-			alias = source.table
+		explicit := alias != ""
+		if !explicit {
+			alias = string(t.ObjectName)
 		}
-		aliases[alias] = source
+		visit(alias, t, explicit)
 	case *tree.AliasedTableExpr:
 		if t.As.Alias != "" {
 			alias = string(t.As.Alias)
 		}
-		collectDeleteSourceAlias(t.Expr, alias, aliases)
+		walkDMLSourceAliases(t.Expr, alias, visit)
 	case *tree.ParenTableExpr:
-		collectDeleteSourceAlias(t.Expr, alias, aliases)
+		walkDMLSourceAliases(t.Expr, alias, visit)
 	case *tree.ApplyTableExpr:
 		if alias == "" {
-			collectDeleteSourceAlias(t.Left, "", aliases)
+			walkDMLSourceAliases(t.Left, "", visit)
 		}
 	case *tree.JoinTableExpr:
 		// A group alias does not identify an individual writable table.
 		if alias == "" {
-			collectDeleteSourceAlias(t.Left, "", aliases)
-			collectDeleteSourceAlias(t.Right, "", aliases)
+			walkDMLSourceAliases(t.Left, "", visit)
+			walkDMLSourceAliases(t.Right, "", visit)
 		}
 	}
 }

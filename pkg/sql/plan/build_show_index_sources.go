@@ -125,13 +125,14 @@ func collectShowIndexGeneratedSources(ctx context.Context, stmt *tree.Select, db
 
 // buildShowIndexMetadataPlan scopes generated-source identities to this build.
 // The predicate is attached only after the generated nodes have been recorded.
-func buildShowIndexMetadataPlan(ctx CompilerContext, stmt *tree.Select, where *tree.Where, db string, names map[string]struct{}, parent *ObjectRef) (*Plan, error) {
+func buildShowIndexMetadataPlan(ctx CompilerContext, stmt *tree.Select, where *tree.Where, db string, names map[string]struct{}, parent *ObjectRef, rewrite *tree.RewriteOption) (*Plan, error) {
 	sources, err := collectShowIndexGeneratedSources(ctx.GetContext(), stmt, db, names, parent)
 	if err != nil {
 		return nil, err
 	}
 	if where != nil {
 		stmt.Select.(*tree.SelectClause).Where = where
+		stmt.RewriteOption = rewrite
 	}
 	previous := ctx.GetContext()
 	ctx.SetContext(context.WithValue(previous, showIndexGeneratedSourcesKey{}, sources))
