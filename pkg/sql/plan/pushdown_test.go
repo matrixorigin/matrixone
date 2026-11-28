@@ -898,6 +898,54 @@ func TestSetPhysicalEqualityFilterBoundary(t *testing.T) {
 	}
 }
 
+func TestTablesDatabaseFilterBoundary(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		t.Helper()
+		f, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return f
+	}
+	db := bind("database")
+	col := GetColExpr(db.Typ, 3, 0)
+	left := &plan.Node{ProjectList: []*plan.Expr{GetColExpr(db.Typ, 1, 0)}}
+	right := &plan.Node{ProjectList: []*plan.Expr{GetColExpr(db.Typ, 2, 0)}}
+	set := &plan.Node{NodeType: plan.Node_UNION_ALL, Children: []int32{0, 1}, BindingTags: []int32{3}, ViewPath: []*plan.ViewStep{{DatabaseName: INFORMATION_SCHEMA, ViewName: "TABLES"}}}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder.qry.Nodes = []*plan.Node{left, right, set}
+	canPush := builder.canPushTablesDatabaseFilter
+	filter := bind("=", col, db)
+	require.True(t, canPush(set, filter))
+	require.True(t, canPush(set, bind("=", db, col)))
+	require.False(t, canPush(set, bind("=", GetColExpr(db.Typ, 4, 0), db)))
+	require.False(t, canPush(set, bind("=", col, bind("user"))))
+	builder.qry.Nodes[1] = &plan.Node{ProjectList: []*plan.Expr{db}}
+	require.False(t, canPush(set, filter))
+	builder.qry.Nodes[1] = right
+	set.NodeType = plan.Node_UNION
+	require.False(t, canPush(set, filter))
+	set.NodeType = plan.Node_UNION_ALL
+	projection := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{2}, BindingTags: []int32{4}, ProjectList: []*plan.Expr{col}}
+	builder.qry.Nodes = append(builder.qry.Nodes, projection)
+	builder.tag2NodeID[4] = 3
+	join := &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER}
+	projected := bind("=", GetColExpr(db.Typ, 4, 0), db)
+	require.True(t, canPush(join, projected))
+	require.False(t, canPush(join, bind("=", GetColExpr(db.Typ, 5, 0), db)))
+	join.JoinType = plan.Node_LEFT
+	require.False(t, canPush(join, projected))
+	join.JoinType = plan.Node_INNER
+	projection.Limit = makePlan2Uint64ConstExprWithType(1)
+	require.False(t, canPush(join, projected))
+	projection.Limit = nil
+	projection.ProjectList[0] = db
+	require.False(t, canPush(join, projected))
+	projection.ProjectList[0] = col
+	set.ViewPath = append(set.ViewPath, &plan.ViewStep{DatabaseName: "app", ViewName: "tables"})
+	require.False(t, canPush(set, filter))
+	require.False(t, canPush(join, projected))
+}
+
 func TestVolatileFilterStopsAtPlanBoundary(t *testing.T) {
 	for _, test := range []struct {
 		name       string

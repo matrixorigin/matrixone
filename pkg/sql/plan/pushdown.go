@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -279,6 +280,66 @@ const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
 	return ContainsVolatileFunction(expr) ||
 		builder.containsStatementInvariantFilterDiagnostic(expr)
+}
+
+// DATABASE() is stable within one execution, but must not be folded into a
+// cached plan. Filter the TABLES arms before the local arm observes live
+// AUTO_INCREMENT state for a table outside the requested schema.
+func (builder *QueryBuilder) canPushTablesDatabaseFilter(node *plan.Node, filter *plan.Expr) bool {
+	eq := filter.GetF()
+	if len(eq.GetArgs()) != 2 || !IsEqualFunc(eq.Func.GetObj()) {
+		return false
+	}
+	column, value := eq.Args[0], eq.Args[1]
+	if column.GetCol() == nil {
+		column, value = value, column
+	}
+	col, db := column.GetCol(), value.GetF()
+	if col == nil || db == nil || len(db.Args) != 0 || db.Func.GetObj() != function.EncodeOverloadID(function.DATABASE, 0) {
+		return false
+	}
+	// At an inner join the predicate still names the view's output, not a
+	// UNION arm. Use its binding, not the table name or the other join input.
+	if node.NodeType == plan.Node_JOIN {
+		id, ok := builder.tag2NodeID[col.RelPos]
+		if node.JoinType != plan.Node_INNER || !ok {
+			return false
+		}
+		node = builder.qry.Nodes[id]
+		for node.NodeType == plan.Node_PROJECT {
+			if len(node.Children) != 1 || len(node.BindingTags) != 1 || node.BindingTags[0] != col.RelPos ||
+				node.Limit != nil || node.Offset != nil || !passesTablesColumn(node, column) {
+				return false
+			}
+			column = node.ProjectList[col.ColPos]
+			col = column.GetCol()
+			node = builder.qry.Nodes[node.Children[0]]
+		}
+	}
+	if node.NodeType != plan.Node_UNION_ALL || len(node.BindingTags) != 1 || col.RelPos != node.BindingTags[0] ||
+		len(node.ViewPath) == 0 || len(node.Children) != 2 {
+		return false
+	}
+	owner := node.ViewPath[len(node.ViewPath)-1]
+	if !strings.EqualFold(owner.GetDatabaseName(), INFORMATION_SCHEMA) || !strings.EqualFold(owner.GetViewName(), "tables") {
+		return false
+	}
+	for _, child := range node.Children {
+		if !passesTablesColumn(builder.qry.Nodes[child], column) {
+			return false
+		}
+	}
+	return true
+}
+
+func passesTablesColumn(node *plan.Node, column *plan.Expr) bool {
+	pos := column.GetCol().ColPos
+	if pos < 0 || int(pos) >= len(node.ProjectList) {
+		return false
+	}
+	project := node.ProjectList[pos]
+	return project.GetCol() != nil && project.Typ.Id == column.Typ.Id && project.Typ.PadSpace == column.Typ.PadSpace &&
+		project.Typ.SameCollation(column.Typ)
 }
 
 func normalizeScalarReaggFilterRefs(expr *plan.Expr, groupTag int32, aliases map[[2]int32]int32) {
@@ -740,8 +801,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				continue
 			}
 			if builder.filterPushdownBarrier(filter) {
-				cantPushdown = append(cantPushdown, filter)
-				continue
+				singleInput := joinSides[i] == JoinSideLeft || joinSides[i] == JoinSideRight
+				if !singleInput || !builder.canPushTablesDatabaseFilter(node, filter) {
+					cantPushdown = append(cantPushdown, filter)
+					continue
+				}
 			}
 
 			switch joinSides[i] {
@@ -968,7 +1032,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
-			if builder.filterPushdownBarrier(filter) {
+			if builder.filterPushdownBarrier(filter) && !builder.canPushTablesDatabaseFilter(node, filter) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
