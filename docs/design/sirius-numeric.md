@@ -14,7 +14,7 @@ against their exact base. Merged Sirius #25 supplies representations, codecs
 and scalar primitives. Importer #3 and its unity-test correction #4 are merged.
 Numeric lowering (#29757), campaign acceptance (#30021), and embedded cutover
 (#30251) are now merged. Exact admission uses the native capability snapshot;
-the [embedded guide](../guides/sirius-embedded.md) describes current execution.
+the [embedded guide](../../Sirius.md#configure-and-query) describes current execution.
 
 ## 1. Decision and invariant
 
