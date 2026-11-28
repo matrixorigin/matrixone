@@ -1944,6 +1944,15 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		dbName = qry.GetDatabase()
 	}
 	aliasName := qry.GetTableDef().GetName()
+	if strings.EqualFold(dbName, catalog.MO_CATALOG) && strings.EqualFold(aliasName, catalog.MO_BRANCH_FORK_KEYS) {
+		oldCtx := c.proc.Ctx
+		if oldCtx.Value(defines.InternalExecutorKey{}) == nil {
+			return moerr.NewNotSupportedNoCtx("DDL on the data branch fork catalog")
+		}
+		c.proc.Ctx = context.WithValue(oldCtx, defines.BranchForkKeyAccess{}, true)
+		defer func() { c.proc.Ctx = oldCtx }()
+	}
+
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
 	if isTemp {
@@ -3101,8 +3110,10 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		))
 	}
 	execDelete := func(snames []string) error {
-		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
-		return c.runSqlWithSystemTenant(sql)
+		if err := c.runSqlWithSystemTenant(databranchutils.BuildBranchSnapshotDeleteSQL(snames)); err != nil {
+			return err
+		}
+		return databranchutils.ReclaimBranchForkKeys(snames, c.deleteBranchForkKeys)
 	}
 	return true, databranchutils.MarkAndReclaimBranchSnapshotsCore(
 		deadTIDs, loadDAG, markDeleted, execDelete,
@@ -4403,6 +4414,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err := c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts); err != nil {
 			return err
 		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = plan2.WithReplacementTableFeatures(originalCtx, tableDef)
+		defer func() { c.proc.Ctx = originalCtx }()
 		return c.runSqlWithAccountIdAndOptions(createSQL, int32(accountID), createOpts)
 	}
 	if !isTemp {

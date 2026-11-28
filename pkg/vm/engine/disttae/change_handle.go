@@ -63,6 +63,10 @@ func (tbl *txnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
+	if engine.CollectChangesVisibleDiffFromContext(ctx) != nil {
+		return NewVisibleStateChangesHandle(ctx, tbl, from, to, skipDeletes, objectio.BlockMaxRows, mp,
+			engine.VisibleStateRecoveryResourcesFromContext(ctx), engine.VisibleStateStartRelationFromContext(ctx))
+	}
 	// In-memory logtail rows are stored in physical seqnum order, while
 	// table_changes exposes the current logical schema order. Capture the
 	// current logical-to-physical mapping before constructing any deferred

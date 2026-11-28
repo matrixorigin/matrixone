@@ -1824,7 +1824,7 @@ func updateBranchMetaTable(
 		return err
 	}
 
-	return nil
+	return captureDataBranchForkKeys(ctx, ses, bh, receipt, cloneTxnOp, dstTblDef)
 }
 
 // Routine publication must share RENAME USER's pessimistic-RC creator exclusion.

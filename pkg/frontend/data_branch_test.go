@@ -257,6 +257,27 @@ func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootRebuilds(t *testing.T)
 	)
 }
 
+func TestDataBranchWholePathRequiresCompleteRestoreLineage(t *testing.T) {
+	rows := make([]databranchutils.DataBranchMetadata, 1024)
+	for i := range rows {
+		rows[i].TableID = uint64(i + 2)
+		rows[i].PTableID = uint64(i + 1)
+	}
+	dag := databranchutils.NewDAG(rows)
+	deep := rows[len(rows)-1].TableID
+
+	_, _, _, _, err := dataBranchWholePath(dag, deep, deep, true)
+	require.ErrorContains(t, err, "incomplete lineage path")
+
+	path, _, _, _, err := dataBranchWholePath(dag, deep-1, deep-1, true)
+	require.NoError(t, err)
+	require.Len(t, path, len(rows))
+
+	path, _, _, _, err = dataBranchWholePath(dag, deep+1, deep+1, true)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{deep + 1}, path)
+}
+
 func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 	tblDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
@@ -3037,4 +3058,224 @@ func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T
 		compositeOption{onlineApply: true}, emit, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), int64(10), "h1"}}}}, emitted)
+}
+
+// collectPickCopyAlterGap drives the real collect-range calculation. The old
+// source ends at CloneTS, lo falls during COPY, and hi sees the new generation.
+func collectPickCopyAlterGap(
+	t *testing.T, ses *Session, bh BackgroundExec, tables *tableStuff, dag *branchMetaInfo,
+	oldRel *mock_frontend.MockRelation, cloneTS, lo types.TS, changes engine.ChangesHandle,
+) (context.Context, []engine.ChangesHandle) {
+	t.Helper()
+	const newID, oldID, dbID = uint64(89), uint64(88), uint64(100)
+	fork := dag.pathFromLCAToTarTS[1]
+	cts, hi := types.BuildTS(14, 0), types.BuildTS(20, 0)
+	dag.pathFromLCAToTar = append(dag.pathFromLCAToTar, newID)
+	dag.pathFromLCAToTarTS = append(dag.pathFromLCAToTarTS, cloneTS)
+	dag.pathFromLCAToTarLineageOnly = append(dag.pathFromLCAToTarLineageOnly, true)
+	tables.lcaRel = tables.baseRel
+	tables.lcaCTS = types.BuildTS(3, 0)
+	forkTS := fork.ToTimestamp()
+	tables.baseSnap = &plan.Snapshot{TS: &forkTS}
+	tables.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(dag.lcaTableId).AnyTimes()
+	tar := tables.tarRel.(*mock_frontend.MockRelation)
+	tar.EXPECT().GetTableID(gomock.Any()).Return(newID).AnyTimes()
+	tar.EXPECT().GetDBID(gomock.Any()).Return(dbID).AnyTimes()
+	oldRel.EXPECT().GetDBID(gomock.Any()).Return(dbID).AnyTimes()
+	oldRel.EXPECT().GetTableName().Return("old").AnyTimes()
+	from := cts.Next()
+	if next := lo.Next(); next.GT(&from) {
+		from = next
+	}
+	tar.EXPECT().CollectChanges(gomock.Any(), from, hi, false, gomock.Any()).
+		Return(changes, nil)
+	ctx := context.WithValue(t.Context(), branchCatalogHistoryKey{}, &branchCatalogHistory{
+		dbLowerBounds: map[dbCreatedTimeLowerBoundKey]types.TS{
+			{databaseID: dbID, database: "db1", snapshot: hi}:      {},
+			{databaseID: dbID, database: "db1", snapshot: cloneTS}: {},
+		},
+		tableCTS: map[tableCreationCommitTSKey]types.TS{
+			{tableID: newID, database: "db1", table: "target", snapshot: hi}:   cts,
+			{tableID: oldID, database: "db1", table: "old", snapshot: cloneTS}: types.BuildTS(11, 0),
+		},
+	})
+	tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, dag, nil, nil, &lo, &hi, nil)
+	require.NoError(t, err)
+	require.Len(t, tarHandles, 1)
+	require.Empty(t, baseHandles)
+	return ctx, tarHandles
+}
+
+func TestDataBranchPickWindowForkBoundary(t *testing.T) {
+	dstFork := types.BuildTS(8, 0)
+	srcFork := types.BuildTS(10, 0)
+	firstCTS := types.BuildTS(11, 0)
+	nestedFork := types.BuildTS(15, 0)
+	nestedCTS := types.BuildTS(16, 0)
+	hi := types.BuildTS(20, 0)
+	for _, tc := range []struct {
+		lo     types.TS
+		nested bool
+	}{
+		{lo: types.BuildTS(9, 0)},
+		{lo: srcFork},
+		{lo: srcFork.Next()},
+		{lo: firstCTS},
+		{lo: types.BuildTS(14, 0), nested: true},
+		{lo: nestedFork, nested: true},
+		{lo: nestedFork.Next(), nested: true},
+		{lo: nestedCTS, nested: true},
+	} {
+		t.Run(tc.lo.ToString(), func(t *testing.T) {
+			lo, childCTS := tc.lo, firstCTS
+			if tc.nested {
+				childCTS = nestedCTS
+			}
+			ctrl := gomock.NewController(t)
+			ses := newValidateSession(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(hi.ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+
+			const rootID, parentID, tarID, baseID, dbID = uint64(77), uint64(78), uint64(88), uint64(89), uint64(100)
+			tables := newTestBranchTableStuff(ctrl)
+			tables.lcaCTS = types.BuildTS(3, 0)
+			tar := tables.tarRel.(*mock_frontend.MockRelation)
+			tar.EXPECT().GetTableID(gomock.Any()).Return(tarID).AnyTimes()
+			tar.EXPECT().GetDBID(gomock.Any()).Return(dbID).AnyTimes()
+			tar.EXPECT().CollectChanges(gomock.Any(), childCTS.Next(), hi, false, gomock.Any()).
+				Return(&stubEngineChangesHandle{}, nil)
+			base := tables.baseRel.(*mock_frontend.MockRelation)
+			base.EXPECT().GetTableID(gomock.Any()).Return(baseID).AnyTimes()
+			base.EXPECT().GetDBID(gomock.Any()).Return(dbID).AnyTimes()
+			baseCTS := types.BuildTS(8, 1)
+			base.EXPECT().CollectChanges(gomock.Any(), baseCTS.Next(), hi, false, gomock.Any()).
+				Return(&stubEngineChangesHandle{}, nil)
+			root := mock_frontend.NewMockRelation(ctrl)
+			root.EXPECT().GetTableID(gomock.Any()).Return(rootID).AnyTimes()
+			root.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("root", "name")).AnyTimes()
+			if lo.LT(&srcFork) {
+				root.EXPECT().CollectChanges(gomock.Any(), lo.Next(), srcFork, false, gomock.Any()).
+					Return(&stubEngineChangesHandle{}, nil)
+			}
+			parent := mock_frontend.NewMockRelation(ctrl)
+			if tc.nested {
+				parent.EXPECT().GetTableID(gomock.Any()).Return(parentID).AnyTimes()
+				parent.EXPECT().GetDBID(gomock.Any()).Return(dbID).AnyTimes()
+				parent.EXPECT().GetTableName().Return("parent").AnyTimes()
+				parent.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("parent", "name")).AnyTimes()
+				if lo.LT(&nestedFork) {
+					parent.EXPECT().CollectChanges(gomock.Any(), lo.Next(), nestedFork, false, gomock.Any()).
+						Return(&stubEngineChangesHandle{}, nil)
+				}
+			}
+			oldReopen := reopenDataBranchRelationByID
+			t.Cleanup(func() { reopenDataBranchRelationByID = oldReopen })
+			reopenDataBranchRelationByID = func(_ context.Context, _ *Session, _ BackgroundExec,
+				id uint64, _ *plan.Snapshot) (engine.Relation, error) {
+				if tc.nested && id == parentID {
+					return parent, nil
+				}
+				require.Equal(t, rootID, id)
+				return root, nil
+			}
+
+			ctx := context.WithValue(t.Context(), branchCatalogHistoryKey{}, &branchCatalogHistory{
+				dbLowerBounds: map[dbCreatedTimeLowerBoundKey]types.TS{
+					{databaseID: dbID, database: "db1", snapshot: hi}:         {},
+					{databaseID: dbID, database: "db1", snapshot: nestedFork}: {},
+				},
+				tableCTS: map[tableCreationCommitTSKey]types.TS{
+					{tableID: tarID, database: "db1", table: "target", snapshot: hi}:            childCTS,
+					{tableID: baseID, database: "db1", table: "base", snapshot: hi}:             baseCTS,
+					{tableID: parentID, database: "db1", table: "parent", snapshot: nestedFork}: firstCTS,
+				},
+			})
+			dag := branchMetaInfo{
+				lcaTableId:       rootID,
+				pathFromLCAToTar: []uint64{rootID, tarID}, pathFromLCAToTarTS: []types.TS{{}, srcFork},
+				pathFromLCAToTarLineageOnly: []bool{false, false},
+				pathFromLCAToBase:           []uint64{rootID, baseID}, pathFromLCAToBaseTS: []types.TS{{}, dstFork},
+				pathFromLCAToBaseLineageOnly: []bool{false, false},
+			}
+			if tc.nested {
+				dag.pathFromLCAToTar = []uint64{rootID, parentID, tarID}
+				dag.pathFromLCAToTarTS = []types.TS{{}, srcFork, nestedFork}
+				dag.pathFromLCAToTarLineageOnly = []bool{false, false, false}
+			}
+			tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, nil, &tables, &dag, nil, nil, &lo, &hi, nil)
+			require.NoError(t, err)
+			for _, handle := range append(tarHandles, baseHandles...) {
+				defer handle.Close()
+			}
+			if lo == childCTS {
+				require.NotNil(t, tables.pickWindowStart)
+				require.Equal(t, tarID, tables.pickWindowStart.tableID)
+				require.Equal(t, childCTS, tables.pickWindowStart.snapshot)
+			} else if lo.LT(&srcFork) {
+				require.NotNil(t, tables.pickWindowStart)
+				require.Equal(t, rootID, tables.pickWindowStart.tableID)
+				require.Equal(t, lo, tables.pickWindowStart.snapshot)
+			} else if tc.nested {
+				require.NotNil(t, tables.pickWindowStart)
+				require.Equal(t, parentID, tables.pickWindowStart.tableID)
+				want := lo
+				if nestedFork.LT(&want) {
+					want = nestedFork
+				}
+				require.Equal(t, want, tables.pickWindowStart.snapshot)
+			} else {
+				require.Nil(t, tables.pickWindowStart)
+			}
+		})
+	}
+}
+
+func TestDataBranchPickWindowCopyBoundary(t *testing.T) {
+	cloneTS, cts := types.BuildTS(12, 0), types.BuildTS(14, 0)
+	for _, tc := range []struct {
+		lo       types.TS
+		wantID   uint64
+		wantSnap types.TS
+	}{
+		{lo: cloneTS, wantID: 88, wantSnap: cloneTS},
+		{lo: types.BuildTS(13, 0), wantID: 88, wantSnap: cloneTS},
+		{lo: cts, wantID: 89, wantSnap: cts},
+		{lo: cts.Next(), wantID: 89, wantSnap: cts.Next()},
+	} {
+		t.Run(tc.lo.ToString(), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newValidateSession(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+			tables := newTestBranchTableStuff(ctrl)
+			oldRel := mock_frontend.NewMockRelation(ctrl)
+			oldRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(88)).AnyTimes()
+			oldRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("old", "name")).AnyTimes()
+			fork := types.BuildTS(10, 0)
+			dag := branchMetaInfo{
+				lcaTableId:       77,
+				pathFromLCAToTar: []uint64{77, 88}, pathFromLCAToTarTS: []types.TS{{}, fork},
+				pathFromLCAToTarLineageOnly: []bool{false, false},
+				pathFromLCAToBase:           []uint64{77}, pathFromLCAToBaseTS: []types.TS{{}},
+				pathFromLCAToBaseLineageOnly: []bool{false},
+			}
+			oldReopen := reopenDataBranchRelationByID
+			t.Cleanup(func() { reopenDataBranchRelationByID = oldReopen })
+			reopenDataBranchRelationByID = func(_ context.Context, _ *Session, _ BackgroundExec,
+				id uint64, _ *plan.Snapshot) (engine.Relation, error) {
+				if id == 77 {
+					return tables.baseRel, nil
+				}
+				require.EqualValues(t, 88, id)
+				return oldRel, nil
+			}
+			_, handles := collectPickCopyAlterGap(t, ses, nil, &tables, &dag, oldRel, cloneTS, tc.lo, &stubEngineChangesHandle{})
+			defer handles[0].Close()
+			require.NotNil(t, tables.pickWindowStart)
+			require.Equal(t, tc.wantID, tables.pickWindowStart.tableID)
+			require.Equal(t, tc.wantSnap, tables.pickWindowStart.snapshot)
+		})
+	}
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -783,6 +784,39 @@ func BuildBranchSnapshotDeleteSQL(snames []string) string {
 	}
 	b.WriteByte(')')
 	return b.String()
+}
+
+// ReclaimBranchForkKeys removes fork evidence after every descendant of the
+// logical fork has been deleted. An intermediate table may be gone while
+// its ledger is still needed by a live descendant.
+func ReclaimBranchForkKeys(names []string, deleteSQL func(string) error) error {
+	// Keep the filter bounded for large database drops. Physical IDs are
+	// cluster-unique, so a single system catalog suffices.
+	const batchSize = 512
+	for start := 0; start < len(names); start += batchSize {
+		var b strings.Builder
+		b.WriteString("delete from " + catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS + " where table_id in (")
+		count := 0
+		for _, name := range names[start:min(start+batchSize, len(names))] {
+			id, ok := ParseBranchSnapshotName(name)
+			if !ok {
+				continue
+			}
+			if count > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(strconv.FormatUint(id, 10))
+			count++
+		}
+		if count == 0 {
+			continue
+		}
+		b.WriteByte(')')
+		if err := deleteSQL(b.String()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // BuildBranchMetadataDeleteSQL returns a guarded DELETE for reclaimable

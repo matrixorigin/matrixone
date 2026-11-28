@@ -349,6 +349,7 @@ const (
 	MO_INDEX_UPDATE = "mo_index_update"
 
 	MO_BRANCH_METADATA  = "mo_branch_metadata"
+	MO_BRANCH_FORK_KEYS = "mo_branch_fork_keys"
 	MO_FEATURE_LIMIT    = "mo_feature_limit"
 	MO_FEATURE_REGISTRY = "mo_feature_registry"
 

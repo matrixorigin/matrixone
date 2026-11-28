@@ -17,6 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,9 +27,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // branchSnapshotName is a thin alias over the databranchutils helper so that
@@ -308,6 +314,245 @@ func compactHistoricalAlterLineageWithBH(
 	return nil
 }
 
+// withRestoreBranchHistory finds source IDs whose lineage can be disconnected
+// by physical recreation. A surviving branch can have forked after the snapshot.
+func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundExec, snapshotTS int64) (context.Context, error) {
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	defer bh.ClearExecResultSet()
+	sql := fmt.Sprintf("select table_id,p_table_id,level from mo_catalog.mo_branch_metadata {MO_TS = %d} "+
+		"union all select table_id,p_table_id,level from mo_catalog.mo_branch_metadata", snapshotTS)
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			markAll := defines.RestoreBranchHistoryCheck(func(context.Context, uint64, uint64, uint32, string, string) (bool, error) {
+				return true, nil
+			})
+			return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, markAll), nil
+		}
+		return ctx, err
+	}
+	results, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return ctx, err
+	}
+	ids := make(map[uint64]struct{})
+	rebuilds := make(map[uint64][]uint64)
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			child, err := result.GetUint64(sysCtx, row, 0)
+			if err != nil {
+				return ctx, err
+			}
+			parent, err := result.GetUint64(sysCtx, row, 1)
+			if err != nil {
+				return ctx, err
+			}
+			level, err := result.GetString(sysCtx, row, 2)
+			if err != nil {
+				return ctx, err
+			}
+			if databranchutils.IsRebuildLineageLevel(level) {
+				rebuilds[child] = append(rebuilds[child], parent)
+				rebuilds[parent] = append(rebuilds[parent], child)
+			}
+			if databranchutils.IsLiveBranchLevel(level) {
+				ids[child] = struct{}{}
+				ids[parent] = struct{}{}
+			}
+		}
+	}
+	// Follow physical replacements in either direction from known forks.
+	// A chain containing only ordinary table rebuilds has no fork evidence.
+	pending := make([]uint64, 0, len(ids))
+	for id := range ids {
+		pending = append(pending, id)
+	}
+	for i := 0; i < len(pending); i++ {
+		for _, id := range rebuilds[pending[i]] {
+			if _, seen := ids[id]; !seen {
+				ids[id] = struct{}{}
+				pending = append(pending, id)
+			}
+		}
+	}
+	inLineage := func(physicalID, logicalID uint64) bool {
+		_, physical := ids[physicalID]
+		_, logical := ids[logicalID]
+		return physical || logicalID != 0 && logical
+	}
+	// Restore can drop whole databases before planning their replacement
+	// tables. Resolve the previous destination in the pre-restore view.
+	txn := backgroundExecTxnOperator(bh)
+	if txn != nil {
+		txn = txn.CloneSnapshotOp(txn.SnapshotTS())
+	}
+	check := defines.RestoreBranchHistoryCheck(func(ctx context.Context, sourceID, sourceLogicalID uint64, accountID uint32, database, table string) (bool, error) {
+		if inLineage(sourceID, sourceLogicalID) {
+			return true, nil
+		}
+		if txn == nil {
+			return true, nil
+		}
+		ctx = defines.AttachAccountId(ctx, accountID)
+		db, err := ses.GetTxnHandler().GetStorage().Database(ctx, database, txn)
+		if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		rel, err := db.Relation(ctx, table, nil)
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		old := rel.GetTableDef(ctx)
+		return inLineage(rel.GetTableID(ctx), old.GetLogicalId()) ||
+			old.GetFeatureFlag()&features.BranchHistoryLostOnRestore != 0, nil
+	})
+	return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, check), nil
+}
+
+// checkRestoredPickHistory handles protected PICK when there is no shared
+// ancestor. A restored endpoint can be a new generation of a missing fork
+// parent. A parent that still has a live logical identity proves that its fork
+// belongs to a different lineage.
+func checkRestoredPickHistory(ctx context.Context, ses *Session, bh BackgroundExec, dag *databranchutils.DataBranchDAG, info *branchMetaInfo, tables *tableStuff, sourceFlags, targetFlags uint64) error {
+	reject := func() error {
+		return moerr.NewNotSupported(ctx, "DATA BRANCH PICK with FAIL or SKIP requires branch history unavailable after restore")
+	}
+	if (sourceFlags|targetFlags)&features.BranchHistoryLostOnRestore != 0 {
+		source, target := tables.endpointIdentities(ctx, ses)
+		var independent bool
+		switch {
+		case targetFlags&features.BranchRestoreFlags == 0 && len(info.pathFromLCAToBase) == 1:
+			independent = independentPickEndpointCreatedAfterRestore(ctx, ses, source, tables.tarRel, target, tables.baseRel)
+		case sourceFlags&features.BranchRestoreFlags == 0 && len(info.pathFromLCAToTar) == 1:
+			independent = independentPickEndpointCreatedAfterRestore(ctx, ses, target, tables.baseRel, source, tables.tarRel)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !independent {
+			return reject()
+		}
+	}
+
+	var parents []uint64
+	addParents := func(path []uint64, lineageOnly []bool) {
+		for i := 1; i < len(path); i++ {
+			if !lineageOnly[i] {
+				parents = append(parents, path[i-1])
+			}
+		}
+	}
+	if sourceFlags&features.RestoredTable != 0 {
+		addParents(info.pathFromLCAToBase, info.pathFromLCAToBaseLineageOnly)
+	}
+	if targetFlags&features.RestoredTable != 0 {
+		addParents(info.pathFromLCAToTar, info.pathFromLCAToTarLineageOnly)
+	}
+	if len(parents) == 0 {
+		return nil
+	}
+
+	generations := dag.RebuildGenerations(parents)
+	var ids []uint64
+	for _, group := range generations {
+		ids = append(ids, group...)
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	literals := make([]string, len(ids))
+	for i, id := range ids {
+		literals[i] = strconv.FormatUint(id, 10)
+	}
+	list := strings.Join(literals, ",")
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	defer bh.ClearExecResultSet()
+	sql := fmt.Sprintf("select rel_id,coalesce(rel_logical_id,rel_id) from mo_catalog.mo_tables "+
+		"where rel_id in (%s) or rel_logical_id in (%s)", list, list)
+	results, err := historicalLineageQuery(sysCtx, bh, sql)
+	if err != nil {
+		return err
+	}
+	live := make(map[uint64]struct{}, len(ids))
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			for col := uint64(0); col < 2; col++ {
+				id, err := result.GetUint64(sysCtx, row, col)
+				if err != nil {
+					return err
+				}
+				live[id] = struct{}{}
+			}
+		}
+	}
+	for _, group := range generations {
+		if !slices.ContainsFunc(group, func(id uint64) bool {
+			_, ok := live[id]
+			return ok
+		}) {
+			return reject()
+		}
+	}
+	return nil
+}
+
+// The caller has ruled out restore provenance and incoming DAG edges on the
+// independent side. Its original catalog row must postdate a committed row
+// for the restored physical table. A surviving parent can also have a
+// single-node path, so the lack of a common ancestor alone does not suffice.
+func independentPickEndpointCreatedAfterRestore(
+	ctx context.Context,
+	ses *Session,
+	restoredOwner branchIdentity,
+	restored engine.Relation,
+	independentOwner branchIdentity,
+	independent engine.Relation,
+) bool {
+	handler := ses.GetTxnHandler()
+	txn := handler.GetTxn()
+	snapshot := types.TimestampToTS(txn.SnapshotTS())
+	independentCtx := identityCtx(ctx, independentOwner)
+	independentID := independent.GetTableID(independentCtx)
+	def := independent.GetTableDef(independentCtx)
+	if def.GetLogicalId() != independentID {
+		// A rebuild can create a new physical table for an older identity.
+		return false
+	}
+	key := packMoTablesCPKey(independentOwner.account, def.GetDbName(), independent.GetTableName())
+	created, original, err := readTableCatalogCommitTS(independentCtx, ses, independentID, snapshot, key)
+	if err != nil || !original || created.IsEmpty() {
+		return false
+	}
+
+	restoredCtx := identityCtx(ctx, restoredOwner)
+	key = packMoTablesCPKey(restoredOwner.account, restored.GetTableDef(restoredCtx).GetDbName(), restored.GetTableName())
+	visible, _, err := readTableCatalogCommitTS(restoredCtx, ses, restored.GetTableID(restoredCtx), snapshot, key)
+	if err != nil || visible.IsEmpty() || !visible.LT(&created) {
+		return false
+	}
+
+	// A system-account restore can replace the global branch catalog without
+	// recreating the other accounts' tables. Trust the missing branch edge
+	// only if the current catalog already existed when this table was created.
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	db, err := handler.GetStorage().Database(sysCtx, catalog.MO_CATALOG, txn)
+	if err != nil {
+		return false
+	}
+	metadata, err := db.Relation(sysCtx, catalog.MO_BRANCH_METADATA, nil)
+	if err != nil {
+		return false
+	}
+	key = packMoTablesCPKey(catalog.System_Account, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA)
+	catalogVisible, _, err := readTableCatalogCommitTS(sysCtx, ses, metadata.GetTableID(sysCtx), snapshot, key)
+	return err == nil && !catalogVisible.IsEmpty() && catalogVisible.LT(&created)
+}
+
 // loadBranchDAGWithBH reads mo_branch_metadata under the sys account and
 // returns an in-memory DAG. It is used by the frontend reclaim entry point
 // which has a BackgroundExec available.
@@ -406,7 +651,11 @@ func reclaimAccountOwnedBranchMetadataWithBH(
 			return err
 		}
 	}
-	return nil
+	forkCtx := context.WithValue(sysCtx, defines.BranchForkKeyAccess{}, true)
+	return databranchutils.ReclaimBranchForkKeys(plan.SnapshotNames, func(sql string) error {
+		bh.ClearExecResultSet()
+		return bh.Exec(forkCtx, sql)
+	})
 }
 
 // getBranchParentAccountName resolves the account name for the source

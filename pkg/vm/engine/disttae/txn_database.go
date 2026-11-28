@@ -89,6 +89,10 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
+	forkKeys := db.databaseId == catalog.MO_CATALOG_ID && strings.EqualFold(name, catalog.MO_BRANCH_FORK_KEYS)
+	if forkKeys && ctx.Value(defines.BranchForkKeyAccess{}) == nil {
+		return nil, nil
+	}
 	txn := db.getTxn()
 	if _, err := txnIsValid(txn.op); err != nil {
 		return nil, err
@@ -104,8 +108,8 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 	if err != nil {
 		return nil, err
 	}
-	if openSys {
-		accountId = 0
+	if openSys || forkKeys {
+		accountId = catalog.System_Account
 	}
 
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
@@ -191,6 +195,10 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 // to insert into or delete from mo_tables and mo_columns,
 // rather than trigger an actual create or delete operation for table.
 func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) error {
+	if db.databaseId == catalog.MO_CATALOG_ID && strings.EqualFold(name, catalog.MO_BRANCH_FORK_KEYS) &&
+		ctx.Value(defines.BranchForkKeyAccess{}) == nil {
+		return moerr.NewNoSuchTable(ctx, db.databaseName, name)
+	}
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid

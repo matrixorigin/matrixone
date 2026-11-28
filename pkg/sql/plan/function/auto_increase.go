@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,6 +51,14 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		database, err := eng.Database(proc.Ctx, dbName, proc.GetTxnOperator())
 		if err != nil {
 			return moerr.NewInvalidInputf(proc.Ctx, "Database '%s' does not exist", dbName)
+		}
+		// INFORMATION_SCHEMA.TABLES also projects this value for the private
+		// fork ledger. Its schema has no auto-increment column.
+		if strings.EqualFold(dbName, catalog.MO_CATALOG) && strings.EqualFold(tableName, catalog.MO_BRANCH_FORK_KEYS) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
 		relation, err := database.Relation(proc.Ctx, tableName, nil)
 		if err != nil {

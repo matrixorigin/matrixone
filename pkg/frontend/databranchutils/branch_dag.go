@@ -29,6 +29,7 @@ type dagNode struct {
 	TableID  uint64
 	CloneTS  int64
 	ParentID uint64
+	Creator  uint64
 	// LineageOnly marks physical rebuilds (COPY ALTER and TRUNCATE)
 	// that preserve one logical branch rather than creating a new fork.
 	LineageOnly bool
@@ -67,6 +68,7 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 
 		node1.CloneTS = row.CloneTS
 		node1.ParentID = row.PTableID
+		node1.Creator = row.Creator
 		node1.LineageOnly = row.LineageOnly
 		node1.ClearsRows = row.ClearsRows
 
@@ -97,6 +99,11 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 	}
 
 	return dag
+}
+
+// Creator returns the account that owns the physical child of a fork.
+func (d *DataBranchDAG) Creator(tableID uint64) uint32 {
+	return uint32(d.nodes[tableID].Creator)
 }
 
 // calculateDepth computes node depth iteratively. If the parent walk reaches a
@@ -164,6 +171,36 @@ func (d *DataBranchDAG) RebuildChain(tableID uint64) []uint64 {
 		}
 	}
 	return ids
+}
+
+// RebuildGenerations returns the known physical generations of each supplied
+// table, including rebuilds newer than the supplied ID. It never crosses a
+// logical fork.
+func (d *DataBranchDAG) RebuildGenerations(tableIDs []uint64) [][]uint64 {
+	children := make(map[uint64][]uint64)
+	for _, node := range d.nodes {
+		if node.LineageOnly && node.Parent != nil {
+			children[node.ParentID] = append(children[node.ParentID], node.TableID)
+		}
+	}
+	byRoot := make(map[uint64][]uint64)
+	groups := make([][]uint64, 0, len(tableIDs))
+	for _, id := range tableIDs {
+		root := id
+		for node := d.nodes[id]; node != nil && node.LineageOnly && node.Parent != nil; node = node.Parent {
+			root = node.ParentID
+		}
+		generations, ok := byRoot[root]
+		if !ok {
+			generations = []uint64{root}
+			for i := 0; i < len(generations); i++ {
+				generations = append(generations, children[generations[i]]...)
+			}
+			byRoot[root] = generations
+		}
+		groups = append(groups, generations)
+	}
+	return groups
 }
 
 func (d *DataBranchDAG) HasParent(tableID uint64) bool {

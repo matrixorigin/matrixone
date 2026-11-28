@@ -270,10 +270,7 @@ func reconcileBoundedClearPickInserts(
 			return false, err
 		}
 		stop, err := func() (bool, error) {
-			keyBatch := batch.NewWithSize(1)
-			keyBatch.Vecs[0] = keys
-			keyBatch.SetRowCount(keys.Length())
-			live, misses, err := probeDataBranchRows(ctx, ses, bh, keyBatch, destination, timestamp.Timestamp{})
+			live, misses, err := probeDataBranchRows(ctx, ses, bh, keys, destination, timestamp.Timestamp{})
 			if err != nil {
 				return false, err
 			}

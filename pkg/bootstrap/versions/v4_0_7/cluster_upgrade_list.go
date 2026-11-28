@@ -40,6 +40,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	addSQLTaskRunClaim,
 	addSQLTaskScheduleGeneration,
 	addSQLTaskRunningIndex,
+	branchForkKeys,
 }
 
 // EnsureViewMetadataCatalogs prepares the metadata required by CN admission.
@@ -101,4 +102,14 @@ func snapshotQuotaIndex() versions.UpgradeEntry {
 			return checkCatalogIndex(txn, accountID, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, "idx_snapshot_quota_target", false, "account_name", "level", "obj_id", "kind")
 		},
 	}
+}
+
+var branchForkKeys = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_BRANCH_FORK_KEYS,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogBranchForkKeysDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MO_BRANCH_FORK_KEYS)
+	},
 }

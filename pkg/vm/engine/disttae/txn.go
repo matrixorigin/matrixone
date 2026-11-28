@@ -3437,6 +3437,11 @@ func (txn *Transaction) getTable(
 	}
 
 	ctx = defines.AttachAccountId(ctx, id)
+	// Workspace validation and tombstone transfer can reopen catalog writes
+	// during commit, after the branch operation's SQL context has expired.
+	if dbName == catalog.MO_CATALOG && tbName == catalog.MO_BRANCH_FORK_KEYS {
+		ctx = context.WithValue(ctx, defines.BranchForkKeyAccess{}, true)
+	}
 
 	database, err := txn.engine.Database(ctx, dbName, txnOp)
 	if err != nil {

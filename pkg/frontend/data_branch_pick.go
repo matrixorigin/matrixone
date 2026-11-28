@@ -247,12 +247,22 @@ func pickMergeDiffs(
 		}
 	}()
 
+	var destinationProbe *tableStuff
+	var destinationSP types.TS
+	if stmt.BetweenFrom != "" && stmt.BetweenTo != "" && tblStuff.def.pkKind != fakeKind {
+		probe := dataBranchHistoricalProbeStuff(ctx, tblStuff, tblStuff.baseRel)
+		_, ident := tblStuff.endpointIdentities(ctx, ses)
+		_, destinationSP = tblStuff.resolvedSnapshots(ses)
+		probe.lcaIdent = &ident
+		probe.lcaRelSnapshot = destinationSP
+		destinationProbe = &probe
+	}
 	if err = produce(func(wrapped batchWithKind) (bool, error) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if err := appendPickedBatchRows(ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys); err != nil {
+		if err := appendPickedBatchRows(ctx, ses, bh, tblStuff, wrapped, tmpValsBuffer, appender,
+			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys, destinationProbe, destinationSP); err != nil {
 			return false, err
 		}
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
@@ -286,6 +296,7 @@ func pickMergeDiffs(
 func appendPickedBatchRows(
 	ctx context.Context,
 	ses *Session,
+	bh BackgroundExec,
 	tblStuff tableStuff,
 	wrapped batchWithKind,
 	tmpValsBuffer *bytes.Buffer,
@@ -293,6 +304,8 @@ func appendPickedBatchRows(
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
 	acceptedDirectUpdateKeys map[string]struct{},
+	destinationProbe *tableStuff,
+	destinationSP types.TS,
 ) (err error) {
 	// PICK only cares about two kinds of batches from hashDiff:
 	//   1. target INSERT (side=target, kind=INSERT) — source rows to add/replace
@@ -311,26 +324,68 @@ func appendPickedBatchRows(
 	}
 
 	row := make([]any, len(tblStuff.def.colNames))
+	checkDestination := destinationProbe != nil && wrapped.side == diffSideTarget &&
+		wrapped.kind == diffInsert && !wrapped.restoreMissing
+	var destinationRows *batch.Batch
+	var missing []int64
+	var probeStart, probeEnd, nextFound int
+	defer func() {
+		if destinationRows != nil {
+			tblStuff.retPool.releaseRetBatch(destinationRows, false)
+		}
+	}()
 
 	for rowIdx := range wrapped.batch.RowCount() {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		rowDirectUpdate := directUpdate
+		restoreMissing, requiresNative := wrapped.restoreMissing, wrapped.requiresNativeUpdate
 
 		// Extract PK for conflict handling (FAIL error message, SKIP set).
 		pkKey, err2 := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
 		if err2 != nil {
 			return err2
 		}
+		destinationRow := -1
+		if checkDestination {
+			if rowIdx == probeEnd {
+				if destinationRows != nil {
+					tblStuff.retPool.releaseRetBatch(destinationRows, false)
+					destinationRows = nil
+				}
+				probeStart, probeEnd = rowIdx, min(rowIdx+maxSqlBatchCnt, wrapped.batch.RowCount())
+				keys, err := wrapped.batch.Vecs[tblStuff.def.pkColIdx].Window(probeStart, probeEnd)
+				if err != nil {
+					return err
+				}
+				destinationRows, missing, err = probeDataBranchRows(ctx, ses, bh, keys, *destinationProbe, destinationSP.ToTimestamp())
+				if err != nil {
+					return err
+				}
+				nextFound = 0
+			}
+			if len(missing) != 0 && missing[0] == int64(rowIdx-probeStart) {
+				missing = missing[1:]
+			} else {
+				destinationRow = nextFound
+				nextFound++
+			}
+		}
 
 		// Handle conflict semantics for picked keys.
 		if wrapped.side == diffSideBase && wrapped.kind == diffDelete {
-			// A base DELETE for a picked key means the key exists in both
-			// source and destination with different values (a conflict).
+			// A base DELETE marks a destination row affected by a conflict
+			// on this picked key.
 			if userConflictOpt != nil {
 				switch userConflictOpt.Opt {
 				case tree.CONFLICT_FAIL:
+					if wrapped.pickDeleteInsertConflict {
+						return moerr.NewDataBranchConflictNoCtxf(
+							"%s DELETE and %s INSERT on pk(%v)",
+							tblStuff.tarRel.GetTableName(), wrapped.name, pkKey,
+						)
+					}
 					return moerr.NewDataBranchConflictNoCtxf(
 						"%s %s and %s %s on pk(%v) with different values",
 						tblStuff.tarRel.GetTableName(), diffInsert,
@@ -365,11 +420,56 @@ func appendPickedBatchRows(
 				delete(acceptedDirectUpdateKeys, pkKey)
 			}
 		}
+		if checkDestination {
+			switch {
+			case rowDirectUpdate && destinationRow < 0:
+				// The key can be absent at the destination's fork without
+				// a destination tombstone to mark it for restoration.
+				restoreMissing = true
+			case !rowDirectUpdate && destinationRow >= 0:
+				// A window INSERT can collide with an unchanged inherited
+				// row, which is not present in any destination change batch.
+				cmp, err := compareRowInWrappedBatches(ctx, ses, tblStuff, rowIdx, destinationRow, true,
+					wrapped, batchWithKind{batch: destinationRows})
+				if err != nil {
+					return err
+				}
+				if cmp == 0 {
+					continue
+				}
+				if userConflictOpt != nil {
+					switch userConflictOpt.Opt {
+					case tree.CONFLICT_FAIL:
+						return moerr.NewDataBranchConflictNoCtxf("%s INSERT and %s INSERT on pk(%v) with different values",
+							tblStuff.tarRel.GetTableName(), tblStuff.baseRel.GetTableName(), pkKey)
+					case tree.CONFLICT_SKIP:
+						continue
+					}
+				}
+				rowDirectUpdate = true
+			}
+			if rowDirectUpdate && destinationRow >= 0 && !requiresNative {
+				// Staging omits uniquely indexed special columns. For a
+				// conflict the destination, not the source's lo, decides
+				// whether those columns must be assigned.
+				for _, idx := range tblStuff.def.indexedSpecialUpdateIdxes {
+					cmp, err := compareSingleValInVector(ctx, ses, rowIdx, destinationRow,
+						wrapped.batch.Vecs[idx], destinationRows.Vecs[idx])
+					if err != nil {
+						return err
+					}
+					if cmp != 0 {
+						requiresNative = true
+						break
+					}
+				}
+			}
+		}
 		if rowDirectUpdate && wrapped.kind == diffDelete {
 			continue
 		}
 		stageUpdate := dataBranchStagesUpdate(
-			appender, rowDirectUpdate, wrapped.requiresNativeUpdate, wrapped.restoreMissing,
+			appender, rowDirectUpdate, requiresNative, restoreMissing,
 		)
 		extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
 		if stageUpdate {
@@ -384,7 +484,7 @@ func appendPickedBatchRows(
 		}
 		if err = appendOrStageDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			rowDirectUpdate, stageUpdate, wrapped.restoreMissing,
+			rowDirectUpdate, stageUpdate, restoreMissing,
 		); err != nil {
 			return
 		}

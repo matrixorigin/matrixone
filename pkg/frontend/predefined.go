@@ -422,6 +422,16 @@ var (
     	primary key(table_id)
 	)`, catalog.MO_BRANCH_METADATA)
 
+	// The reserved byte 0xfe marks a complete fork image. An empty byte
+	// string marks a fork backed by a committed parent snapshot. The primary
+	// key groups rows by child ID without tenant-local auto-increment state.
+	MoCatalogBranchForkKeysDDL = fmt.Sprintf(`create table mo_catalog.%s(
+		table_id bigint unsigned not null,
+		entry_id uuid not null default uuid(),
+		key_bytes longblob,
+		primary key(table_id, entry_id)
+	)`, catalog.MO_BRANCH_FORK_KEYS)
+
 	MoCatalogFeatureLimitDDL = fmt.Sprintf(`create table mo_catalog.%s(
     	account_id bigint unsigned not null comment 'this limit applies on this account',
     	feature_code varchar(50) NOT NULL comment 'snapshot/branch/...',

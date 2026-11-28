@@ -14,7 +14,11 @@
 
 package engine
 
-import "context"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
 
 // VisibleStateEntry is one encoded logical row retained while a visible-state
 // changes handle compares two snapshot boundaries. Key is the encoded primary
@@ -44,6 +48,31 @@ type VisibleStateRecoveryResources interface {
 }
 
 type visibleStateStartRelationKey struct{}
+type collectChangesVisibleDiffKey struct{}
+
+// VisibleStateKeySelector returns the increasing row indexes of keys to compare.
+type VisibleStateKeySelector func(*vector.Vector) ([]int64, error)
+
+// VisibleStateDiff compares protected snapshots instead of replaying
+// materialization. CompareColumns maps start names to end names when the
+// caller has already established column lineage across a logical fork.
+type VisibleStateDiff struct {
+	SelectKeys     VisibleStateKeySelector
+	CompareColumns map[string]string
+	StartAccount   *uint32 // Owner of the protected start relation, when supplied.
+}
+
+func WithCollectChangesVisibleDiff(ctx context.Context, diff VisibleStateDiff) context.Context {
+	return context.WithValue(ctx, collectChangesVisibleDiffKey{}, &diff)
+}
+
+func CollectChangesVisibleDiffFromContext(ctx context.Context) *VisibleStateDiff {
+	if ctx == nil {
+		return nil
+	}
+	diff, _ := ctx.Value(collectChangesVisibleDiffKey{}).(*VisibleStateDiff)
+	return diff
+}
 
 // WithVisibleStateStartRelation supplies the protected lineage boundary that
 // precedes a CollectChanges range. Data Branch uses the parent relation at a

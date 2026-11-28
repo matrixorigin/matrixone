@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -189,25 +190,28 @@ func TestNewVisibleStateChangesHandle(t *testing.T) {
 	afterReader := &scriptedReader{batches: []*batch.Batch{after}}
 	tableDef := makeVisibleStateTableDef(true, true)
 	resources := newTestVisibleStateResources()
+	startAccount := uint32(7)
+	ctx := engine.WithRetainRowID(defines.AttachAccountId(context.Background(), 9), true)
+	ctx = engine.WithCollectChangesVisibleDiff(ctx, engine.VisibleStateDiff{StartAccount: &startAccount})
+	beforeCtx := defines.AttachAccountId(ctx, startAccount)
 
 	gomock.InOrder(
 		txnOp.EXPECT().CloneSnapshotOp(end.ToTimestamp()).Return(txnOp),
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("", "", afterRel, nil),
-		beforeRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef),
-		afterRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef),
-		beforeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
+		beforeRel.EXPECT().GetTableDef(beforeCtx).Return(tableDef),
+		afterRel.EXPECT().GetTableDef(ctx).Return(tableDef),
+		beforeRel.EXPECT().Ranges(beforeCtx, gomock.Any()).Return(nil, nil),
 		beforeRel.EXPECT().BuildReaders(
-			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			beforeCtx, gomock.Any(), nil, gomock.Any(), 1, 0, false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{beforeReader}, nil),
-		afterRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
+		afterRel.EXPECT().Ranges(ctx, gomock.Any()).Return(nil, nil),
 		afterRel.EXPECT().BuildReaders(
-			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			ctx, gomock.Any(), nil, gomock.Any(), 1, 0, false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{afterReader}, nil),
 	)
 
-	ctx := engine.WithRetainRowID(context.Background(), true)
 	h, err := NewVisibleStateChangesHandle(ctx, tbl, start, end, false, 16, mp, resources, beforeRel)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -252,7 +256,7 @@ func TestNewVisibleStateChangesHandleRejectsInvalidInputs(t *testing.T) {
 		beforeScan: visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		afterScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 	}
-	err = h.initSchema(nil, makeVisibleStateTableDef(false, true))
+	err = h.initSchema(nil, makeVisibleStateTableDef(false, true), nil)
 	require.ErrorContains(t, err, "primary key column not found")
 
 	h = &VisibleStateChangesHandle{
@@ -260,7 +264,7 @@ func TestNewVisibleStateChangesHandleRejectsInvalidInputs(t *testing.T) {
 		beforeScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		afterScan:   visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 	}
-	err = h.initSchema(nil, makeVisibleStateTableDef(true, false))
+	err = h.initSchema(nil, makeVisibleStateTableDef(true, false), nil)
 	require.ErrorContains(t, err, "rowid column not found")
 }
 
@@ -527,7 +531,7 @@ func TestVisibleStateChangesHandleProjectsHistoricalSchema(t *testing.T) {
 		afterScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		beforeRows: newTestVisibleStateStore(),
 	}
-	require.NoError(t, h.initSchema(beforeDef, afterDef))
+	require.NoError(t, h.initSchema(beforeDef, afterDef, nil))
 	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.beforeScan.attrs)
 	require.Equal(t, []int{1, 2}, h.beforeScan.compareIdxes)
 	require.Equal(t, []int{1, 3}, h.afterScan.compareIdxes)

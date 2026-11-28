@@ -471,6 +471,10 @@ func (t *combinedTxnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
+	if engine.CollectChangesVisibleDiffFromContext(ctx) != nil {
+		// One logical comparison owns the full parent and child snapshots.
+		return t.primary.CollectChanges(ctx, from, to, skipDeletes, mp)
+	}
 	tables, err := t.tablesFunc()
 	if err != nil {
 		return nil, err

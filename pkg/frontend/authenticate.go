@@ -959,6 +959,7 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_BRANCH_FORK_KEYS:   0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -1010,6 +1011,7 @@ var (
 		catalog.MO_ISCP_LOG:             0,
 		catalog.MO_INDEX_UPDATE:         0,
 		catalog.MO_BRANCH_METADATA:      0,
+		catalog.MO_BRANCH_FORK_KEYS:     0,
 		catalog.MO_FEATURE_LIMIT:        0,
 		catalog.MO_FEATURE_REGISTRY:     0,
 		catalog.MO_ROLE_RULE:            0,
@@ -1070,6 +1072,7 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogBranchForkKeysDDL,
 		MoCatalogMoCcprLogDDL,
 		MoCatalogMoCcprTablesDDL,
 		MoCatalogMoCcprDbsDDL,
@@ -11799,7 +11802,8 @@ func isSysOnlyCatalogRelationSQL(sql string) bool {
 	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
 		return true
 	}
-	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+	if strings.HasPrefix(sql, "create table mo_catalog."+catalog.MO_BRANCH_METADATA) ||
+		strings.HasPrefix(sql, "create table mo_catalog."+catalog.MO_BRANCH_FORK_KEYS) {
 		return true
 	}
 

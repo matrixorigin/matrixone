@@ -26,6 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
+func TestDAGRebuildGenerations(t *testing.T) {
+	dag := NewDAG([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, LineageOnly: true, ClearsRows: true},
+		{TableID: 3, PTableID: 2},
+		{TableID: 4, PTableID: 2, LineageOnly: true},
+		{TableID: 5, PTableID: 3, LineageOnly: true},
+		{TableID: 6, PTableID: 4, LineageOnly: true, ClearsRows: true},
+	})
+	require.Equal(t, [][]uint64{{1, 2, 4, 6}, {3, 5}, {1, 2, 4, 6}},
+		dag.RebuildGenerations([]uint64{2, 3, 6}))
+}
+
 func TestDAGFunctionality(t *testing.T) {
 
 	// --- Test Setup: Define a complex graph with multiple trees (a forest) ---

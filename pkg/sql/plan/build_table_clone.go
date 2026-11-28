@@ -24,8 +24,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -129,6 +131,23 @@ func buildCloneTable(
 
 	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt, false); err != nil {
 		return nil, err
+	}
+
+	if target := createTablePlan.GetDdl().GetCreateTable().GetTableDef(); target != nil {
+		target.FeatureFlag |= srcTblDef.FeatureFlag & features.BranchRestoreFlags
+		if check, restoring := ctx.GetContext().Value(defines.RestoreBranchHistoryKey{}).(defines.RestoreBranchHistoryCheck); restoring &&
+			!slices.Contains(catalog.SystemDatabases, dstDatabaseName) {
+			target.FeatureFlag |= features.RestoredTable
+			if target.FeatureFlag&features.BranchHistoryLostOnRestore == 0 {
+				mark, err := check(ctx.GetContext(), srcTblDef.TblId, srcTblDef.LogicalId, dstAccount, dstDatabaseName, dstTableName)
+				if err != nil {
+					return nil, err
+				}
+				if mark {
+					target.FeatureFlag |= features.BranchHistoryLostOnRestore
+				}
+			}
+		}
 	}
 
 	return &Plan{

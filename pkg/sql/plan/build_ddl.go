@@ -3075,6 +3075,7 @@ func buildCreateTable(
 		},
 	}
 
+	createTable.TableDef.FeatureFlag |= replacementTableFeatures(ctx.GetContext(), createTable.TableDef.Name)
 	if stmt.PartitionOption != nil {
 		createTable.RawSQL = canonicalCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned

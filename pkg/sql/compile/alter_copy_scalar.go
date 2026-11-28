@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,7 +33,7 @@ import (
 
 func scalarAlterCopyDefinition(def *plan.TableDef) bool {
 	if def == nil || def.TableType != catalog.SystemOrdinaryRel || def.IsTemporary || def.Hidden ||
-		def.FeatureFlag != 0 || def.Partition != nil || def.ClusterBy != nil || def.ViewSql != nil || def.TblFunc != nil ||
+		def.FeatureFlag&^features.BranchRestoreFlags != 0 || def.Partition != nil || def.ClusterBy != nil || def.ViewSql != nil || def.TblFunc != nil ||
 		len(def.Indexes) != 0 || len(def.Fkeys) != 0 || len(def.RefChildTbls) != 0 || len(def.Checks) != 0 || len(def.Cols) == 0 {
 		return false
 	}

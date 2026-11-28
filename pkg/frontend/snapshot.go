@@ -144,6 +144,7 @@ var (
 		catalog.MO_ISCP_LOG:             systemCatalogRestoreSkip,
 		catalog.MO_INDEX_UPDATE:         systemCatalogRestoreCopy,
 		catalog.MO_BRANCH_METADATA:      systemCatalogRestoreCopy,
+		catalog.MO_BRANCH_FORK_KEYS:     systemCatalogRestoreSkip,
 		catalog.MO_FEATURE_LIMIT:        systemCatalogRestoreCopy,
 		catalog.MO_FEATURE_REGISTRY:     systemCatalogRestoreCopy,
 		catalog.MO_CCPR_LOG:             systemCatalogRestoreSkip,
@@ -976,6 +977,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if err != nil {
 		return stats, err
 	}
+	if stmt.Level == tree.RESTORELEVELTABLE {
+		if err = validateRestoreTableTarget(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, toAccountId); err != nil {
+			return stats, err
+		}
+	}
+	if ctx, err = withRestoreBranchHistory(ctx, ses, bh, snapshot.ts); err != nil {
+		return stats, err
+	}
 	if stmt.Level == tree.RESTORELEVELACCOUNT {
 		if err = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
 			return stats, err
@@ -1003,12 +1012,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
-	}
-
-	if stmt.Level == tree.RESTORELEVELTABLE {
-		if err = validateRestoreTableTarget(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, toAccountId); err != nil {
-			return stats, err
-		}
 	}
 
 	tempSnap := &plan.Snapshot{

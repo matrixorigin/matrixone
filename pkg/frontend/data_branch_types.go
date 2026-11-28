@@ -81,12 +81,15 @@ const (
 )
 
 type collectRange struct {
-	from             []types.TS
-	end              []types.TS
-	rel              []engine.Relation
-	relSnapshot      []types.TS // The snapshot at which each relation was opened.
-	startBoundaryRel []engine.Relation
-	clearAt          []types.TS
+	from              []types.TS
+	end               []types.TS
+	rel               []engine.Relation
+	relSnapshot       []types.TS // The snapshot at which each relation was opened.
+	startBoundaryRel  []engine.Relation
+	forkBefore        []*dataBranchPickWindowStart
+	zeroHistoryStarts []dataBranchPickWindowStart
+	firstCommitted    dataBranchPickWindowStart
+	clearAt           []types.TS
 	// idents carries the physical identity each segment was opened under
 	// (design §6): the walking side's endpoint identity for the endpoint
 	// segment and the winning candidate identity for reopened lineage
@@ -116,55 +119,13 @@ func (r collectRange) startBoundary(i int) engine.Relation {
 	return r.startBoundaryRel[i]
 }
 
-// restrict intersects the source segments with the PICK window (lo, hi].
-func (r *collectRange) restrict(lo, hi types.TS) {
-	first := lo.Next()
-	j := 0
-	for i := range r.rel {
-		from, end := r.from[i], r.end[i]
-		boundary := r.startBoundary(i)
-		if first.GT(&from) {
-			from = first
-			boundary = nil
+func (r collectRange) hasCollapsedFork() bool {
+	for _, before := range r.forkBefore {
+		if before != nil && before.collapsedFork {
+			return true
 		}
-		if hi.LT(&end) {
-			end = hi
-		}
-		if from.GT(&end) {
-			continue
-		}
-		r.from[j], r.end[j], r.rel[j] = from, end, r.rel[i]
-		if r.relSnapshot != nil {
-			r.relSnapshot[j] = r.relSnapshot[i]
-		}
-		if r.idents != nil {
-			r.idents[j] = r.idents[i]
-		}
-		if r.startBoundaryRel != nil {
-			r.startBoundaryRel[j] = boundary
-		}
-		if r.clearAt != nil {
-			at := r.clearAt[i]
-			if at.LT(&first) {
-				at = types.TS{}
-			}
-			r.clearAt[j] = at
-		}
-		j++
 	}
-	r.from, r.end, r.rel = r.from[:j], r.end[:j], r.rel[:j]
-	if r.relSnapshot != nil {
-		r.relSnapshot = r.relSnapshot[:j]
-	}
-	if r.idents != nil {
-		r.idents = r.idents[:j]
-	}
-	if r.startBoundaryRel != nil {
-		r.startBoundaryRel = r.startBoundaryRel[:j]
-	}
-	if r.clearAt != nil {
-		r.clearAt = r.clearAt[:j]
-	}
+	return false
 }
 
 func (r collectRange) crossesClear() bool {
@@ -240,6 +201,7 @@ type branchMetaInfo struct {
 	pathFromLCAToBase            []uint64
 	pathFromLCAToBaseTS          []types.TS
 	pathFromLCAToBaseLineageOnly []bool
+	baseForks                    []dataBranchFork
 	pathFromLCAToBaseClearsRows  []bool
 	// The source's physical lineage continues above the LCA when a bounded
 	// PICK needs to read a lower snapshot from before that ancestor.
@@ -344,18 +306,19 @@ type tableStuff struct {
 	tarOperand  *branchOperand
 	baseOperand *branchOperand
 
-	lcaRel            engine.Relation
-	lcaRelSnapshot    types.TS // snapshot at which lcaRel was opened
-	lcaProbeTableId   uint64   // nonzero when the probe uses a different generation from lcaRel
-	lcaCTS            types.TS
-	lcaHasZeroHistory bool
-
+	lcaRel                engine.Relation
+	lcaRelSnapshot        types.TS // snapshot at which lcaRel was opened
+	lcaProbeTableId       uint64   // nonzero when the probe uses a different generation from lcaRel
+	lcaCTS                types.TS
+	lcaHasZeroHistory     bool
+	zeroHistoryBaseStarts []dataBranchPickWindowStart
+	pickOrigin            *dataBranchPickOrigin
 	// A side crossing a truncate is collected as visible rows at its upper
 	// boundary. A bounded source also carries its own lower snapshot image.
 	tarVisibleState, baseVisibleState bool
-	boundedPick                       bool
-	tarClearBaseline                  *dataBranchSnapshotRelation
-	tarPathDefs, basePathDefs         []*plan.TableDef
+
+	tarClearBaseline          *dataBranchSnapshotRelation
+	tarPathDefs, basePathDefs []*plan.TableDef
 	// Bounded PICK copies source values without firing destination ON UPDATE
 	// expressions for columns its generated UPDATE leaves unchanged.
 	pickOnUpdateNames []string
@@ -363,6 +326,18 @@ type tableStuff struct {
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.
 	lcaIdent *branchIdentity
+
+	// PICK may cut into an existing source generation after its lineage
+	// boundary. Resolve source updates against that window's before image.
+	boundedPick     bool
+	pickWindowStart *dataBranchPickWindowStart
+	pickSourceDefs  []*plan.TableDef
+	pickSourceEdges []bool
+	pickBaseDefs    []*plan.TableDef
+	pickBaseEdges   []bool
+	pickBasePath    []uint64
+	pickBasePathTS  []types.TS
+	pickForkColumns dataBranchForkColumns
 
 	def struct {
 		colNames      []string     // all columns
@@ -426,6 +401,21 @@ func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
 		return t.lcaRel
 	}
 	return nil
+}
+
+// The initial images of two sibling forks can be compared when the children
+// first became visible in the same commit.
+type dataBranchPickOrigin struct {
+	source, destination           dataBranchPickWindowStart
+	sourceForks, destinationForks []uint64
+}
+
+type dataBranchPickWindowStart struct {
+	tableID       uint64
+	snapshot      types.TS
+	identity      branchIdentity
+	collapsedFork bool
+	upperColumns  []*plan.ColDef // non-nil when both window bounds use this physical generation
 }
 
 // resolvedSnapshots returns the effective per-side snapshot timestamps:
@@ -510,7 +500,10 @@ type batchWithKind struct {
 	// hasReplacement marks a preserved PICK conflict whose source side emitted
 	// a row to replace the destination conflict victim.
 	hasReplacement bool
-	batch          *batch.Batch
+	// A destination INSERT hit by a source window DELETE. The batch carries
+	// the destination row and has no source replacement.
+	pickDeleteInsertConflict bool
+	batch                    *batch.Batch
 }
 
 // logicalOperation returns the SQL-level operation represented by this diff
@@ -544,9 +537,10 @@ type retBatchList struct {
 
 type compositeOption struct {
 	// onlineApply orders transaction probes and retry-capable MERGE/PICK writes.
-	onlineApply           bool
-	conflictOpt           *tree.ConflictOpt
-	outputSQL             bool
-	expandUpdate          bool
-	preservePickConflicts bool
+	onlineApply               bool
+	conflictOpt               *tree.ConflictOpt
+	outputSQL                 bool
+	expandUpdate              bool
+	preservePickConflicts     bool
+	protectMissingPickHistory bool
 }

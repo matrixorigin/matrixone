@@ -103,7 +103,7 @@ func TestDataBranchTruncateCollectWindow(t *testing.T) {
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 	cr, zeroHistory, err := buildSideCollectRange(ctx, ses, nil, tables,
 		dedupeBranchIdentities(tarIdent, baseIdent), ts(65), ts(51), info.pathFromLCAToTar,
-		info.pathFromLCAToTarTS, info.pathFromLCAToTarClearsRows, info.pathFromLCAToBaseTS,
+		info.pathFromLCAToTarTS, info.pathFromLCAToTarLineageOnly, info.pathFromLCAToTarClearsRows, info.pathFromLCAToBaseTS,
 		nil, ts(65), false)
 	require.NoError(t, err)
 	require.False(t, zeroHistory)
@@ -153,7 +153,7 @@ func TestDataBranchTruncateCollectWindow(t *testing.T) {
 				}
 				return nil, nil
 			}
-			_, _, err := constructChangeHandle(ctx, ses, nil, &tables, &info, nil, lo, hi, nil)
+			_, _, err := constructChangeHandle(ctx, ses, nil, &tables, &info, nil, nil, lo, hi, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 			require.Equal(t, tc.baselineID != 0, tables.tarVisibleState)

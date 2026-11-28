@@ -343,6 +343,16 @@ type OptimizerHints struct{}
 // Determine if now is a bg sql.
 type BgKey struct{}
 
+// BranchForkKeyAccess allows branch metadata operations to open the fork key catalog.
+type BranchForkKeyAccess struct{}
+
+// RestoreBranchHistoryKey carries a RestoreBranchHistoryCheck during restore.
+type RestoreBranchHistoryKey struct{}
+
+// RestoreBranchHistoryCheck reports whether restoring a source table over a
+// destination name may disconnect branch history.
+type RestoreBranchHistoryCheck func(ctx context.Context, sourceID, sourceLogicalID uint64, accountID uint32, database, table string) (bool, error)
+
 // PublicationViewBinding marks a background statement whose only job is
 // binding the persisted metadata of a published view: identifiers keep their
 // source case in parsing, the compile stops after binding (no optimizer rule
