@@ -105,4 +105,47 @@ select * from update_check where id = 2;
 insert into update_check values (2, 100, 0) on duplicate key update a = 3;
 select * from update_check where id = 2;
 
+set foreign_key_checks = 1;
+create table fk_check_parent(id int primary key);
+create table fk_check_child(
+    id int primary key, pid int, upper_bound int,
+    key idx_fk_check_pid(pid),
+    constraint ck_cascade_bound check(pid < upper_bound),
+    constraint fk_check_cascade foreign key(pid) references fk_check_parent(id) on update cascade
+);
+insert into fk_check_parent values (1), (2);
+insert into fk_check_child values (10, 1, 5), (20, 2, 10);
+
+-- One bad child rolls back the entire parent UPDATE, including the valid cascade.
+update fk_check_parent set id = case id when 1 then 6 else 4 end;
+select * from fk_check_parent order by id;
+select * from fk_check_child force index(idx_fk_check_pid) where pid in (1, 2, 4, 6) order by id;
+update ignore fk_check_parent set id = 6 where id = 1;
+update fk_check_parent p join update_peer u on p.id = u.id set p.id = 6;
+select * from fk_check_parent order by id;
+select * from fk_check_child force index(idx_fk_check_pid) where pid in (1, 2, 4, 6) order by id;
+
+update fk_check_parent set id = 4 where id = 2;
+update fk_check_parent p join update_peer u on p.id = u.id set p.id = 3;
+select * from fk_check_parent order by id;
+select * from fk_check_child force index(idx_fk_check_pid) where pid in (1, 2, 3, 4, 6) order by id;
+
+create table fk_null_parent(id int primary key, v int);
+create table fk_null_child(
+    id int primary key, pid int, allow_null int,
+    constraint ck_cascade_null check(pid is not null or allow_null = 1),
+    constraint fk_check_null foreign key(pid) references fk_null_parent(id) on update set null on delete set null
+);
+insert into fk_null_parent values (1, 10), (2, 20), (3, 30);
+insert into fk_null_child values (10, 1, 0), (20, 2, 1), (30, 3, 1);
+update fk_null_parent set id = 11 where id = 1;
+delete from fk_null_parent where id = 1;
+replace into fk_null_parent values (1, 99);
+select * from fk_null_parent order by id;
+select * from fk_null_child order by id;
+update fk_null_parent set id = 12 where id = 2;
+delete from fk_null_parent where id = 3;
+select * from fk_null_parent order by id;
+select * from fk_null_child order by id;
+
 drop database check_constraint_test;

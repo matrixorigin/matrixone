@@ -100,6 +100,8 @@ func buildRepeatedUpdatePlan(
 		}
 		up.beginIdx = 0
 		up.sourceStep = target.step
+		// The repeated-target plan has already checked each accepted role.
+		up.checkMode = skipUpdateCheck
 		// Checked FK key transitions were rejected by the safety boundary.
 		up.skipForeignKeyChecks = true
 		// The final assignment map already includes every role's changes.

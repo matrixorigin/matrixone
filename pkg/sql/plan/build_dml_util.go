@@ -86,9 +86,9 @@ func putDeleteNodeInfo(info *deleteNodeInfo) {
 type updateCheckMode uint8
 
 const (
-	skipUpdateCheck updateCheckMode = iota
-	assertUpdateCheck
+	assertUpdateCheck updateCheckMode = iota
 	filterUpdateCheck
+	skipUpdateCheck
 )
 
 type dmlPlanCtx struct {
@@ -4365,7 +4365,7 @@ func makePreUpdateDeletePlan(
 
 	// The target's selected row image feeds both the delete and the insert.
 	// Apply CHECK after dedup and the outer-join row-id guard, before any write.
-	if delCtx.checkMode != skipUpdateCheck && len(delCtx.tableDef.Checks) > 0 {
+	if delCtx.updateColLength > 0 && delCtx.checkMode != skipUpdateCheck && len(delCtx.tableDef.Checks) > 0 {
 		var err error
 		lastNodeId, err = appendCheckConstraintPlanWithColLookup(
 			builder, bindCtx, delCtx.tableDef, lastNodeId, 0,

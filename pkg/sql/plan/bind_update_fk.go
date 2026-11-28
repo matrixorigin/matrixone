@@ -1184,11 +1184,6 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			}},
 		}
 	}
-	finalReplacements := make(map[int32]*plan.Expr, len(newChildExprs))
-	for pos, expr := range newChildExprs {
-		finalReplacements[pos] = expr
-	}
-
 	type mutationIndexPositions struct {
 		oldRowID int32
 		oldKey   int32
@@ -1218,7 +1213,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			childTableDef,
 			idx.def,
 			childTag,
-			finalReplacements,
+			newChildExprs,
 		)
 		if buildErr != nil {
 			return buildErr
@@ -1232,6 +1227,16 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		ProjectList: actionProjection,
 		BindingTags: []int32{actionTag},
 	}, bindCtx)
+
+	// A failed child CHECK must fail the statement, even for UPDATE IGNORE.
+	// Skipping the child alone would leave it referencing the old parent key.
+	actionNodeID, err = appendCheckConstraintPlanWithColLookup(
+		builder, bindCtx, childTableDef, actionNodeID, actionTag,
+		func(_ string, tablePos int32) (int32, bool) { return tablePos, true }, false,
+	)
+	if err != nil {
+		return err
+	}
 
 	rowIDPos := childTableDef.Name2ColIndex[catalog.Row_ID]
 	pkPos := childTableDef.Name2ColIndex[childTableDef.Pkey.PkeyColName]
