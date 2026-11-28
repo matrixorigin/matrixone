@@ -54,7 +54,7 @@ func repeatedUpdateSafetyBoundary(builder *QueryBuilder, bindCtx *BindContext, p
 			}
 			target.changed[table.Cols[pos].ColId] = struct{}{}
 		}
-		generated, err := repeatedGeneratedColumns(table, names)
+		generated, err := affectedGeneratedColumns(table, names)
 		if err != nil {
 			return err
 		}

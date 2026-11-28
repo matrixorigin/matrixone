@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -108,10 +110,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
-	if err != nil {
-		return nil, err
-	}
+	rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if stmt.From != nil && len(stmt.From.Tables) > 0 && tblInfo.needAggFilter {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		lastNodeId, _, _, err = builder.appendRowNumberDedupNode(
@@ -317,7 +316,7 @@ func rewriteGeneratedColumnsForUpdate(
 	planCtxs []*dmlPlanCtx,
 	lastNodeId int32,
 	isIgnore bool,
-) error {
+) {
 	selectNode := builder.qry.Nodes[lastNodeId]
 	tableBase := int32(0)
 	for _, upPlanCtx := range planCtxs {
@@ -364,23 +363,155 @@ func rewriteGeneratedColumnsForUpdate(
 		}
 		tableBase += int32(len(tableDef.Cols) + upPlanCtx.updateColLength)
 	}
+}
 
-	for _, upPlanCtx := range planCtxs {
-		tableDef := upPlanCtx.tableDef
-		for idx, col := range tableDef.Cols {
-			// row_id, compPrimaryKey, clusterByKey are not inserted from old data.
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
+// affectedGeneratedColumns returns the dependency closure in table column order.
+// A generated column can only reference earlier generated columns.
+func affectedGeneratedColumns(table *TableDef, names []string) ([]int, error) {
+	changed := make([]bool, len(table.Cols))
+	for _, name := range names {
+		col, ok := table.Name2ColIndex[name]
+		if !ok || col < 0 || int(col) >= len(changed) {
+			return nil, moerr.NewInternalErrorNoCtx("invalid updated column for generated dependencies")
+		}
+		changed[col] = true
+	}
+	var generated []int
+	for i, col := range table.Cols {
+		if col.GeneratedCol == nil || col.GeneratedCol.Expr == nil {
+			continue
+		}
+		for _, dependency := range collectRefColPos(col.GeneratedCol.Expr) {
+			if dependency < 0 || int(dependency) >= len(changed) {
+				return nil, moerr.NewInternalErrorNoCtx("invalid generated UPDATE dependency")
 			}
-			if offset, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, offset)
-			} else {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, idx)
+			if changed[dependency] {
+				generated = append(generated, i)
+				changed[i] = true
+				break
 			}
 		}
 	}
+	return generated, nil
+}
 
-	return nil
+// appendGeneratedUpdateColumn materializes one value so subsequent generated
+// columns and the write can read the same result.
+func appendGeneratedUpdateColumn(
+	builder *QueryBuilder, bindCtx *BindContext, last int32, col *ColDef, rowPositions []int, isIgnore bool,
+) (int32, int) {
+	input := getProjectionByLastNode(builder, last)
+	lookup := make([]*Expr, len(rowPositions))
+	for i, pos := range rowPositions {
+		lookup[i] = input[pos]
+	}
+	value := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), isIgnore)
+	value = substituteColRefsInExpr(value, lookup, 0)
+	valuePos := len(input)
+	last = builder.appendNode(&Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{last}, ProjectList: append(input, value),
+	}, bindCtx)
+	return last, valuePos
+}
+
+func appendForeignKeyGeneratedUpdate(
+	builder *QueryBuilder, bindCtx *BindContext, last int32, update *dmlPlanCtx,
+) (int32, error) {
+	table := update.tableDef
+	hasGenerated := false
+	for _, col := range table.Cols {
+		if col.GeneratedCol == nil {
+			continue
+		}
+		hasGenerated = true
+		if _, assigned := update.updateColPosMap[col.Name]; assigned {
+			return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+				fmt.Sprintf("foreign key action assigning to generated column '%s'", col.Name))
+		}
+	}
+	if !hasGenerated {
+		return last, nil
+	}
+
+	names := make([]string, 0, len(update.updateColPosMap))
+	for name := range update.updateColPosMap {
+		names = append(names, name)
+	}
+	generated, err := affectedGeneratedColumns(table, names)
+	if err != nil || len(generated) == 0 {
+		return last, err
+	}
+	rowPositions := make([]int, len(table.Cols))
+	for i, col := range table.Cols {
+		rowPositions[i] = i
+		if pos, assigned := update.updateColPosMap[col.Name]; assigned {
+			rowPositions[i] = pos
+		}
+	}
+	for _, i := range generated {
+		col := table.Cols[i]
+		// Recursive writes trust the triggering FK's assignments and skip
+		// outgoing FK checks. A derived value has no such guarantee.
+		for _, fk := range table.Fkeys {
+			if slices.Contains(fk.Cols, col.ColId) {
+				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+					fmt.Sprintf("foreign key action changing generated column '%s' constrained by another foreign key", col.Name))
+			}
+		}
+		changesPK := table.Pkey != nil && slices.Contains(table.Pkey.Names, col.Name)
+		if update.preserveUpdateSourceProjection {
+			// REPLACE binds these writes before column remapping. The legacy
+			// index writer expects a positional plan that is already remapped.
+			for _, index := range table.Indexes {
+				if !index.TableExist {
+					continue
+				}
+				for _, part := range index.Parts {
+					if catalog.ResolveAlias(part) == col.Name {
+						return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+							"REPLACE foreign key action changing an indexed generated column")
+					}
+				}
+			}
+			if changesPK {
+				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+					"REPLACE foreign key action changing a generated primary key")
+			}
+		}
+		if changesPK {
+			if slices.ContainsFunc(table.Indexes, isSyncMaintainedIrregularIndex) {
+				return appendRejectedForeignKeyUpdate(builder, bindCtx, last, update.rowIdPos,
+					"update primary key on a table with a synchronous full-text/vector index")
+			}
+			update.updatePkCol = true
+		}
+	}
+	for _, i := range generated {
+		col := table.Cols[i]
+		last, rowPositions[i] = appendGeneratedUpdateColumn(builder, bindCtx, last, col, rowPositions, false)
+		update.updateColPosMap[col.Name] = rowPositions[i]
+		update.updateColLength++
+	}
+	return last, nil
+}
+
+// Replace the child write with an assertion over its matched rows.
+func appendRejectedForeignKeyUpdate(
+	builder *QueryBuilder, bindCtx *BindContext, last int32, rowID int, reason string,
+) (int32, error) {
+	projection := getProjectionByLastNode(builder, last)
+	absent, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*Expr{projection[rowID]})
+	if err != nil {
+		return -1, err
+	}
+	assert, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{
+		absent, makePlan2StringConstExprWithType(reason), makePlan2StringConstExprWithType("fk_action_not_supported"),
+	})
+	if err != nil {
+		return -1, err
+	}
+	builder.appendStep(builder.appendDMLRowFilter(bindCtx, last, []*Expr{assert}, projection))
+	return -1, nil
 }
 
 // fallbackUpdateFromDedupPartitionCols returns the projection positions used to

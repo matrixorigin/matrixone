@@ -106,7 +106,6 @@ type dmlPlanCtx struct {
 	dedupByRowNumber       bool
 	updateColLength        int
 	rowIdPos               int
-	insertColPos           []int
 	updateColPosMap        map[string]int
 	checkMode              updateCheckMode
 	allDelTableIDs         map[uint64]struct{}
@@ -270,7 +269,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		builder.positionalSinkScans[lastNodeId] = struct{}{}
 	}
 	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
-	if err != nil {
+	if err != nil || lastNodeId < 0 {
 		return err
 	}
 	// Legacy DML is appended after column remapping. Admit final target values
@@ -332,21 +331,20 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNode := builder.qry.Nodes[lastNodeId]
 	newCols := make([]*ColDef, 0, len(updatePlanCtx.tableDef.Cols))
 	oldRowIdPos := len(updatePlanCtx.tableDef.Cols) - 1
-	for _, col := range updatePlanCtx.tableDef.Cols {
+	projectList := make([]*Expr, 0, len(updatePlanCtx.tableDef.Cols))
+	for idx, col := range updatePlanCtx.tableDef.Cols {
 		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 			continue
 		}
 		newCols = append(newCols, col)
-	}
-	updatePlanCtx.tableDef.Cols = newCols
-	insertColLength := len(updatePlanCtx.insertColPos) + 1
-	projectList := make([]*Expr, insertColLength)
-	for i, idx := range updatePlanCtx.insertColPos {
+		if pos, updated := updatePlanCtx.updateColPosMap[col.Name]; updated {
+			idx = pos
+		}
 		name := ""
 		if col, ok := lastNode.ProjectList[idx].Expr.(*plan.Expr_Col); ok {
 			name = col.Col.Name
 		}
-		projectList[i] = &plan.Expr{
+		projectList = append(projectList, &plan.Expr{
 			Typ: lastNode.ProjectList[idx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -354,9 +352,10 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					Name:   name,
 				},
 			},
-		}
+		})
 	}
-	projectList[insertColLength-1] = &plan.Expr{
+	updatePlanCtx.tableDef.Cols = newCols
+	projectList = append(projectList, &plan.Expr{
 		Typ: lastNode.ProjectList[oldRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -364,7 +363,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				Name:   catalog.Row_ID,
 			},
 		},
-	}
+	})
 
 	//append project node
 	projectNode := &Node{
@@ -1188,7 +1187,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					builder.preserveScanProjection[combinedNodeID] = struct{}{}
 
 					updateMap := make(map[string]int)
-					insertColPos := make([]int, 0, len(childTableDef.Cols)-1)
 					projectList := make([]*Expr, len(childTableDef.Cols))
 					for i, col := range childTableDef.Cols {
 						projectList[i] = &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
@@ -1221,16 +1219,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						updateMap[columnName] = len(projectList)
 						projectList = append(projectList, updated)
 					}
-					for i, col := range childTableDef.Cols {
-						if col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName {
-							continue
-						}
-						if pos, ok := updateMap[col.Name]; ok {
-							insertColPos = append(insertColPos, pos)
-						} else {
-							insertColPos = append(insertColPos, i)
-						}
-					}
 					combinedNodeID = builder.appendNode(&plan.Node{
 						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID}, ProjectList: projectList,
 					}, bindCtx)
@@ -1245,7 +1233,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.sourceStep = combinedStep
 					upPlanCtx.updateColPosMap = updateMap
 					upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
-					upPlanCtx.insertColPos = insertColPos
 					upPlanCtx.isFkRecursionCall = true
 					upPlanCtx.updatePkCol = false
 					upPlanCtx.preserveUpdateSourceProjection = true
@@ -1300,8 +1287,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					var oneLeftCond *Expr
 					var oneLeftCondName string
 					updateChildColPosMap := make(map[string]int)
-					updateChildColExpr := make([]*Expr, len(fk.Cols))         // use for update
-					insertColPos := make([]int, 0, len(childTableDef.Cols)-1) // use for update
+					updateChildColExpr := make([]*Expr, len(fk.Cols)) // use for update
 					childColLength := len(childTableDef.Cols)
 					childTablePkMap := make(map[string]struct{})
 					for _, name := range childTableDef.Pkey.Names {
@@ -1398,16 +1384,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}},
 						}
 						parentActionProjection[len(fk.Cols)] = rowIDExpr
-					}
-
-					for idx, col := range childTableDef.Cols {
-						if col.Name != catalog.Row_ID && col.Name != catalog.CPrimaryKeyColName {
-							if pos, ok := updateChildColPosMap[col.Name]; ok {
-								insertColPos = append(insertColPos, pos)
-							} else {
-								insertColPos = append(insertColPos, idx)
-							}
-						}
 					}
 
 					var refAction plan.ForeignKeyDef_RefAction
@@ -1664,7 +1640,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.beginIdx = 0
 						upPlanCtx.updateColPosMap = updateChildColPosMap
 						upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
-						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
 						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
@@ -1713,7 +1688,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.sourceStep = newSourceStep
 								upPlanCtx.beginIdx = 0
 								upPlanCtx.updateColPosMap = updateChildColPosMap
-								upPlanCtx.insertColPos = insertColPos
 								upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 								upPlanCtx.isFkRecursionCall = true
 								upPlanCtx.updatePkCol = updatePk
@@ -4361,6 +4335,15 @@ func makePreUpdateDeletePlan(
 			ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		}
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
+	}
+
+	// A foreign-key action supplies assignments without going through UPDATE binding.
+	if delCtx.isFkRecursionCall && delCtx.updateColLength > 0 {
+		var err error
+		lastNodeId, err = appendForeignKeyGeneratedUpdate(builder, bindCtx, lastNodeId, delCtx)
+		if err != nil || lastNodeId < 0 {
+			return lastNodeId, err
+		}
 	}
 
 	// The target's selected row image feeds both the delete and the insert.

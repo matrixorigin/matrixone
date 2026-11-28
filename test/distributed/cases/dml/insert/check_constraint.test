@@ -148,4 +148,33 @@ delete from fk_null_parent where id = 3;
 select * from fk_null_parent order by id;
 select * from fk_null_child order by id;
 
+create table fk_generated_parent(id int primary key, v int);
+create table fk_generated_child(
+    id int primary key, pid int, fallback int,
+    g int generated always as (ifnull(pid, fallback)) stored,
+    doubled int generated always as (g * 2) stored,
+    constraint ck_generated_cascade check(doubled > 0 and doubled < 16),
+    foreign key(pid) references fk_generated_parent(id) on delete set null on update cascade
+);
+insert into fk_generated_parent values (1, 10), (2, 20), (3, 30), (4, 40);
+insert into fk_generated_child(id, pid, fallback) values (10, 1, 0), (20, 2, 5), (30, 3, 7);
+
+-- The new values of both generated columns must reach CHECK before any row is written.
+delete from fk_generated_parent where id in (1, 2);
+replace into fk_generated_parent values (1, 99);
+update fk_generated_parent p join update_peer u on p.id = u.id set p.id = 8;
+select * from fk_generated_parent order by id;
+select id, pid, g, doubled from fk_generated_child order by id;
+
+replace into fk_generated_parent values (3, 99);
+create index idx_generated on fk_generated_child(doubled);
+-- The legacy index writer cannot run in this REPLACE path. Only matching child rows reject the action.
+replace into fk_generated_parent values (1, 99);
+replace into fk_generated_parent values (4, 99);
+delete from fk_generated_parent where id in (2, 4);
+update fk_generated_parent p join update_peer u on p.id = u.id set p.id = 6;
+select * from fk_generated_parent order by id;
+select id, pid, g, doubled from fk_generated_child force index(idx_generated)
+    where doubled in (2, 4, 6, 10, 12, 14) order by id;
+
 drop database check_constraint_test;
