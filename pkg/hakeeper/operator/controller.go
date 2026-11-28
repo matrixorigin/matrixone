@@ -84,16 +84,19 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	}
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
+			switch step := op.activeStep().(type) {
+			case RemoveLogService:
+				executing.Removing[shardID] = append(executing.Removing[shardID], step.ReplicaID)
+			case AddLogService:
+				executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
+			}
 			for _, step := range op.steps {
 				switch step := step.(type) {
-				case RemoveLogService:
-					executing.Removing[shardID] = append(executing.Removing[shardID], step.ReplicaID)
-				case AddLogService:
-					executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
 				case StartLogService:
 					executing.Starting[shardID] = append(executing.Starting[shardID], step.ReplicaID)
 				case BootstrapShard:
 					executing.Bootstrapping[shardID] = struct{}{}
+					executing.Starting[shardID] = append(executing.Starting[shardID], step.ReplicaID)
 				}
 			}
 		}
@@ -109,12 +112,14 @@ func (c *Controller) GetNonVotingExecutingReplicas() ExecutingReplicas {
 	}
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
+			switch step := op.activeStep().(type) {
+			case RemoveNonVotingLogService:
+				executing.Removing[shardID] = append(executing.Removing[shardID], step.ReplicaID)
+			case AddNonVotingLogService:
+				executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
+			}
 			for _, step := range op.steps {
 				switch step := step.(type) {
-				case RemoveNonVotingLogService:
-					executing.Removing[shardID] = append(executing.Removing[shardID], step.ReplicaID)
-				case AddNonVotingLogService:
-					executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
 				case StartNonVotingLogService:
 					executing.Starting[shardID] = append(executing.Starting[shardID], step.ReplicaID)
 				}
@@ -127,13 +132,36 @@ func (c *Controller) GetNonVotingExecutingReplicas() ExecutingReplicas {
 func (c *Controller) RemoveFinishedOperator(
 	logState pb.LogState, tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState,
 ) {
-	for _, ops := range c.operators {
-		for _, op := range ops {
-			op.Check(logState, tnState, cnState, proxyState)
-			switch op.Status() {
-			case SUCCESS, EXPIRED:
-				c.RemoveOperator(op)
+	for shardID, ops := range c.operators {
+		ops = slices.DeleteFunc(ops, func(op *Operator) bool {
+			step := op.Check(logState, tnState, cnState, proxyState)
+			if op.IsEnd() {
+				return true
 			}
+			var replica Replica
+			switch step := step.(type) {
+			case AddLogService:
+				replica = step.Replica
+			case AddNonVotingLogService:
+				replica = step.Replica
+			case RemoveLogService:
+				replica = step.Replica
+			case RemoveNonVotingLogService:
+				replica = step.Replica
+			default:
+				return false
+			}
+			if shard, ok := logState.Shards[replica.ShardID]; ok && shard.Epoch > replica.Epoch {
+				// A newer Raft configuration fences this unfinished proposal.
+				_ = op.Cancel()
+				return true
+			}
+			return false
+		})
+		if len(ops) == 0 {
+			delete(c.operators, shardID)
+		} else {
+			c.operators[shardID] = ops
 		}
 	}
 }
@@ -215,10 +243,6 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return addTnReplica(st)
 	case RemoveTnReplica:
 		return removeTnReplica(st)
-	case StopTnStore:
-		return stopTnStore(st)
-	case StopLogStore:
-		return stopLogStore(st)
 	case CreateTaskService:
 		return createTaskService(st)
 	case DeleteCNStore:
@@ -400,26 +424,6 @@ func removeTnReplica(st RemoveTnReplica) pb.ScheduleCommand {
 			ChangeType: pb.StopReplica,
 		},
 		ServiceType: pb.TNService,
-	}
-}
-
-func stopTnStore(st StopTnStore) pb.ScheduleCommand {
-	return pb.ScheduleCommand{
-		UUID: st.StoreID,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: st.StoreID,
-		},
-		ServiceType: pb.TNService,
-	}
-}
-
-func stopLogStore(st StopLogStore) pb.ScheduleCommand {
-	return pb.ScheduleCommand{
-		UUID: st.StoreID,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: st.StoreID,
-		},
-		ServiceType: pb.LogService,
 	}
 }
 

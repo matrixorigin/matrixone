@@ -216,7 +216,7 @@ func TestTNStartReservationsAndPartialReports(t *testing.T) {
 	require.Len(t, c.OperatorController.GetOperators(3), 1)
 }
 
-func TestTNStartRebuildAndTeardown(t *testing.T) {
+func TestTNStartRebuildAndRecovery(t *testing.T) {
 	c, state, alloc := tnStartScenario(t)
 	first := c.Check(alloc, state, false)
 	require.Len(t, first, 1)
@@ -237,26 +237,23 @@ func TestTNStartRebuildAndTeardown(t *testing.T) {
 	state.TNState.Stores["tn-a"] = info
 	require.Empty(t, stale.Check(alloc, state, false))
 	require.Empty(t, stale.OperatorController.GetOperators(2))
-	// Keep this coordinator's start unfinished when entering teardown.
+	// A temporary shortage of Log replica reports leaves the TN start in flight.
 	info.Shards = nil
 	state.TNState.Stores["tn-a"] = info
 	pending := c.OperatorController.GetOperators(2)[0]
-	// Expired majority forces the actual syshealth teardown branch.
 	state.ClusterInfo.LogShards = []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}
 	state.LogState = pb.LogState{Stores: map[string]pb.LogStoreInfo{}}
 	for i, id := range []string{"log-a", "log-b"} {
 		state.LogState.Stores[id] = pb.LogStoreInfo{Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{ShardID: 1}, ReplicaID: uint64(i + 1)}}}
 	}
-	for i := 0; i < 2; i++ {
-		commands := c.Check(alloc, state, false)
-		require.NotEmpty(t, commands)
-		for _, cmd := range commands {
-			require.Nil(t, cmd.ConfigChange)
-			require.NotNil(t, cmd.ShutdownStore)
-		}
-		require.Empty(t, c.OperatorController.GetOperators(2))
-		require.Equal(t, operator.CANCELED, pending.Status())
+	for _, cmd := range c.Check(alloc, state, false) {
+		require.Nil(t, cmd.ShutdownStore)
 	}
+	require.Same(t, pending, c.OperatorController.GetOperators(2)[0])
+	info.Shards = []pb.TNShardInfo{{ShardID: 2, ReplicaID: restarted[0].ConfigChange.Replica.ReplicaID}}
+	state.TNState.Stores["tn-a"] = info
+	c.Check(alloc, state, false)
+	require.Empty(t, c.OperatorController.GetOperators(2))
 }
 
 func TestTNRetryPreservesPendingLogStart(t *testing.T) {
@@ -288,6 +285,12 @@ func TestTNRetryPreservesPendingLogStart(t *testing.T) {
 				require.NoError(t, err)
 				return r
 			}
+			// The delivery RSM must observe the same membership as the checker.
+			for _, id := range []string{"a", "b"} {
+				report, err := (&pb.LogStoreHeartbeat{UUID: id, Replicas: state.LogState.Stores[id].Replicas}).Marshal()
+				require.NoError(t, err)
+				apply(hakeeper.GetLogStoreHeartbeatCmd(report))
+			}
 			first := coordinator.Check(alloc, state, false)
 			var logStart *pb.ScheduleCommand
 			for i := range first {
@@ -297,14 +300,17 @@ func TestTNRetryPreservesPendingLogStart(t *testing.T) {
 				}
 			}
 			require.NotNil(t, logStart, "fixture must schedule the actual missing log replica")
-			t.Logf("first batch: %+v", first)
+			confirmedStart := *logStart
+			change := *logStart.ConfigChange
+			change.Replica.Epoch = shard.Epoch
+			confirmedStart.ConfigChange = &change
 			apply(hakeeper.GetUpdateCommandsCmd(1, first))
 			hb, err := (&pb.LogStoreHeartbeat{UUID: "c"}).Marshal()
 			require.NoError(t, err)
 			if tt.consumed {
 				var original pb.CommandBatch
 				require.NoError(t, original.Unmarshal(apply(hakeeper.GetLogStoreHeartbeatCmd(hb)).Data))
-				require.Contains(t, original.Commands, *logStart)
+				require.Contains(t, original.Commands, confirmedStart)
 			}
 			state.Tick++
 			second := coordinator.Check(alloc, state, false)
@@ -315,7 +321,7 @@ func TestTNRetryPreservesPendingLogStart(t *testing.T) {
 			var received pb.CommandBatch
 			require.NoError(t, received.Unmarshal(apply(hakeeper.GetLogStoreHeartbeatCmd(hb)).Data))
 			t.Logf("log heartbeat commands: %+v", received.Commands)
-			require.Contains(t, received.Commands, *logStart, "a TN-only retry must not erase an unrelated undelivered log start")
+			require.Contains(t, received.Commands, confirmedStart, "a TN-only retry must not erase an unrelated undelivered log start")
 			// A real report ends the retained Log intent, even while TN still retries.
 			store := state.LogState.Stores["c"]
 			store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 3}}
@@ -345,4 +351,122 @@ func TestTNRetryDoesNotResurrectObsoleteRemoval(t *testing.T) {
 	next := c.Check(alloc, state, false)
 	require.Equal(t, first, next)
 	require.Equal(t, operator.STARTED, old.Status())
+}
+
+func TestCoordinatorRepairsAfterMissingReplicaReport(t *testing.T) {
+	c, state, alloc := tnStartScenario(t)
+	state.Tick = 10000
+	state.TNState.Stores["tn-a"] = pb.TNStoreInfo{Tick: state.Tick, TaskServiceCreated: true}
+	state.ClusterInfo.LogShards = []metadata.LogShardRecord{
+		{ShardID: 0, NumberOfReplicas: 3}, {ShardID: 1, NumberOfReplicas: 3},
+	}
+	members := map[uint64]string{1: "log-a", 2: "log-b", 3: "log-c"}
+	data := pb.LogShardInfo{ShardID: 1, Replicas: members, LeaderID: 1, Epoch: 1}
+	control := pb.LogShardInfo{Replicas: members, LeaderID: 1, Epoch: 1}
+	state.LogState = pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{0: control, 1: data},
+		Stores: map[string]pb.LogStoreInfo{
+			"log-a": {Tick: state.Tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: control, ReplicaID: 1}, {LogShardInfo: data, ReplicaID: 1}}},
+			"log-b": {Replicas: []pb.LogReplicaInfo{{LogShardInfo: control, ReplicaID: 2}, {LogShardInfo: data, ReplicaID: 2}}},
+			"log-c": {Tick: state.Tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: control, ReplicaID: 3}}},
+			"log-d": {Tick: state.Tick},
+		},
+	}
+	recoveryCommands := func() []pb.ScheduleCommand {
+		t.Helper()
+		cmds := c.Check(alloc, state, false)
+		for _, cmd := range cmds {
+			require.Nil(t, cmd.ShutdownStore)
+		}
+		return cmds
+	}
+	hasChange := func(cmds []pb.ScheduleCommand, change pb.ConfigChangeType, shard uint64, target string) bool {
+		for _, cmd := range cmds {
+			if cc := cmd.ConfigChange; cmd.ServiceType == pb.LogService && cc != nil &&
+				cc.ChangeType == change && cc.Replica.ShardID == shard && cc.Replica.UUID == target {
+				return true
+			}
+		}
+		return false
+	}
+	cmds := recoveryCommands()
+	require.True(t, hasChange(cmds, pb.StartReplica, 1, "log-c"), "start the missing configured replica")
+	require.True(t, hasChange(cmds, pb.RemoveReplica, 0, "log-b"), "a healthy control quorum can repair independently")
+	require.False(t, hasChange(cmds, pb.RemoveReplica, 1, "log-b"))
+	var tnStart bool
+	for _, cmd := range cmds {
+		if cmd.ServiceType == pb.TNService && cmd.ConfigChange != nil && cmd.ConfigChange.ChangeType == pb.StartReplica {
+			tnStart = true
+		}
+	}
+	require.True(t, tnStart, "TN recovery must continue while the data shard lacks quorum")
+	report := state.LogState.Stores["log-c"]
+	report.Replicas = append(report.Replicas, pb.LogReplicaInfo{LogShardInfo: data, ReplicaID: 3, IsNonVoting: true})
+	state.LogState.Stores["log-c"] = report
+	require.False(t, hasChange(recoveryCommands(), pb.RemoveReplica, 1, "log-b"), "a non-voting report is insufficient")
+
+	report.Replicas[1].IsNonVoting = false
+	report.Replicas[1].ReplicaID = 4
+	require.False(t, hasChange(recoveryCommands(), pb.RemoveReplica, 1, "log-b"), "a different replica ID is insufficient")
+	report.Replicas[1].ReplicaID = 3
+	data.ReplicaStoreIncarnations = map[uint64]string{3: "old-incarnation"}
+	state.LogState.Shards[1] = data
+	report.StoreIncarnation = "replacement-incarnation"
+	state.LogState.Stores["log-c"] = report
+	require.False(t, hasChange(recoveryCommands(), pb.RemoveReplica, 1, "log-b"), "a report from a replacement store is insufficient")
+
+	report.StoreIncarnation = "old-incarnation"
+	state.LogState.Stores["log-c"] = report
+	require.True(t, hasChange(recoveryCommands(), pb.RemoveReplica, 1, "log-b"), "resume on the same coordinator when the voter reports")
+	data.Replicas = map[uint64]string{1: "log-a", 3: "log-c"}
+	data.Epoch++
+	report.Replicas[1].LogShardInfo = data
+	state.LogState.Shards[1] = data
+	require.True(t, hasChange(recoveryCommands(), pb.AddReplica, 1, "log-d"), "replace the expired voter after removal")
+}
+
+func TestCoordinatorReplansUnconsumedMembershipAfterExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recovered bool
+	}{{"still required", false}, {"target recovered", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, state, alloc := tnStartScenario(t)
+			state.Tick = 10000
+			state.TNState = pb.TNState{}
+			state.ClusterInfo = pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}}
+			shard := pb.LogShardInfo{ShardID: 1, Epoch: 7, LeaderID: 1, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"}}
+			state.LogState = pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: map[string]pb.LogStoreInfo{
+				"a": {Tick: state.Tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}},
+				"b": {Tick: 0, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 2}}},
+				"c": {Tick: state.Tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 3}}},
+			}}
+			hasRemoval := func(cmds []pb.ScheduleCommand) bool {
+				for _, cmd := range cmds {
+					if cmd.ConfigChange != nil && cmd.ConfigChange.ChangeType == pb.RemoveReplica && cmd.ConfigChange.Replica.ReplicaID == 2 {
+						return true
+					}
+				}
+				return false
+			}
+			require.True(t, hasRemoval(c.Check(alloc, state, false)))
+			var removal *operator.Operator
+			for _, op := range c.OperatorController.GetOperators(1) {
+				for _, step := range op.OpSteps() {
+					if r, ok := step.(operator.RemoveLogService); ok && r.ReplicaID == 2 {
+						removal = op
+					}
+				}
+			}
+			require.NotNil(t, removal)
+			require.False(t, hasRemoval(c.Check(alloc, state, false)), "a still-owned operator is not repeatedly delivered")
+			if tc.recovered {
+				store := state.LogState.Stores["b"]
+				store.Tick = state.Tick
+				state.LogState.Stores["b"] = store
+			}
+			removal.SetStatus(operator.EXPIRED)
+			require.Equal(t, !tc.recovered, hasRemoval(c.Check(alloc, state, false)), "retry must follow the current desired state")
+		})
+	}
 }

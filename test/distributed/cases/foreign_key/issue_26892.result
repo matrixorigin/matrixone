@@ -17,6 +17,47 @@ select id, parent_id from child order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
 1  ¦  101
 truncate table child;
+insert into parent values (2), (3);
+insert into child values (3, 2), (4, 3), (5, 1);
+prepare fk_delete_child from 'delete from child where id = 5';
+set foreign_key_checks = 0;
+prepare fk_delete_off from 'delete from parent where id = 2';
+set foreign_key_checks = 1;
+execute fk_delete_off;
+Cannot delete or update a parent row: a foreign key constraint fails
+select id from parent order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id, parent_id from child order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+3  ¦  2  𝄀
+4  ¦  3  𝄀
+5  ¦  1
+deallocate prepare fk_delete_off;
+prepare fk_delete_on from 'delete from parent where id = 3';
+set foreign_key_checks = 0;
+execute fk_delete_on;
+select id from parent order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id, parent_id from child order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+3  ¦  2  𝄀
+4  ¦  3  𝄀
+5  ¦  1
+deallocate prepare fk_delete_on;
+set foreign_key_checks = 1;
+execute fk_delete_child;
+select id, parent_id from child order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+3  ¦  2  𝄀
+4  ¦  3
+deallocate prepare fk_delete_child;
+truncate table child;
+delete from parent where id in (2, 3);
 set foreign_key_checks = 0;
 prepare fk_plain_off from 'insert into child values (?, ?)';
 set @id = 10, @parent_id = 110;

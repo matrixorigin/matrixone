@@ -274,13 +274,17 @@ func (l *store) mustSaveMetadata() {
 	}
 }
 
-func (l *store) addMetadata(shardID uint64, replicaID uint64, nonVoting bool) {
+func (l *store) addMetadata(shardID, replicaID uint64, nonVoting bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.addMetadataLocked(shardID, replicaID, nonVoting)
+}
+
+func (l *store) addMetadataLocked(shardID uint64, replicaID uint64, nonVoting bool) {
 	rec := metadata.LogShard{}
 	rec.ShardID = shardID
 	rec.ReplicaID = replicaID
 	rec.NonVoting = nonVoting
-	l.mu.Lock()
-	defer l.mu.Unlock()
 
 	for _, rec := range l.mu.metadata.Shards {
 		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
@@ -306,26 +310,28 @@ func (l *store) removeMetadata(shardID uint64, replicaID uint64) {
 		}
 	}
 	l.mu.metadata.Shards = shards
-	// The initial HAKeeper bootstrap can run after retirement cleanup. Keep
-	// its blocked-start decision for this process until an explicit re-add.
-	if shardID != hakeeper.DefaultHAKeeperShardID {
-		delete(l.mu.skippedZombies, zombieKey{shardID: shardID, replicaID: replicaID})
-	}
+
 	l.mustSaveMetadata()
 }
 
 func (l *store) markReplicaRetiring(shardID, replicaID uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.markReplicaRetiringLocked(shardID, replicaID)
+}
+
+func (l *store) markReplicaRetiringLocked(shardID, replicaID uint64) {
 	for i := range l.mu.metadata.Shards {
 		rec := &l.mu.metadata.Shards[i]
 		if rec.ShardID == shardID && rec.ReplicaID == replicaID && !rec.Retiring {
 			rec.Retiring = true
-			if shardID == hakeeper.DefaultHAKeeperShardID {
+			key := zombieKey{shardID: shardID, replicaID: replicaID}
+			_, skipped := l.mu.skippedZombies[key]
+			if skipped || shardID == hakeeper.DefaultHAKeeperShardID || l.nh.HasNodeInfo(shardID, replicaID) {
 				if l.mu.skippedZombies == nil {
-					l.mu.skippedZombies = make(map[zombieKey]struct{})
+					l.mu.skippedZombies = make(map[zombieKey]startupAbsence)
 				}
-				l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}] = struct{}{}
+				l.mu.skippedZombies[key] = startupAbsence{retired: true}
 			}
 			l.mustSaveMetadata()
 			return
