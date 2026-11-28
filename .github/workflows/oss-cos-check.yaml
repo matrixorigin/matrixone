@@ -8,7 +8,7 @@ permissions:
 jobs:
   storage:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
-    uses: matrixorigin/CI/.github/workflows/oss-cos-check.yaml@90ef2df40e0048b5a47c0f50e9becebbe009a4d1
+    uses: matrixorigin/CI/.github/workflows/oss-cos-check.yaml@d94028c93e14f8054a7cd4d1e2535bbaf59a8ec8
     secrets:
       TEST_S3FS_ALIYUN: ${{ secrets.TEST_S3FS_ALIYUN }}
       TEST_S3FS_QCLOUD: ${{ secrets.TEST_S3FS_QCLOUD }}
