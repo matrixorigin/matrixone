@@ -76,7 +76,12 @@ func (cfg *Config) Fill() {
 }
 
 func (cfg Config) LogStoreExpired(start, current uint64) bool {
-	return uint64(int(cfg.LogStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
+	return commandDeliveryStoreExpired(start, current, cfg.LogStoreTimeoutTicks())
+}
+
+// LogStoreTimeoutTicks is the expiry horizon shared by scheduling and delivery.
+func (cfg Config) LogStoreTimeoutTicks() uint64 {
+	return uint64(cfg.LogStoreTimeout/time.Second) * uint64(cfg.TickPerSecond)
 }
 
 func (cfg Config) TNStoreExpired(start, current uint64) bool {

@@ -177,8 +177,8 @@ func TestHAKeeperColdRestartWithHistoricalReplicas(t *testing.T) {
 	// All peers are unavailable when each constructor checks membership.
 	original := getShardMembershipFn
 	t.Cleanup(func() { getShardMembershipFn = original })
-	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, bool, error) {
-		return nil, false, nil
+	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, uint64, bool, error) {
+		return nil, 1, false, nil
 	}
 	r1 := restartService3(t, c1, logger)
 	defer func() { assert.NoError(t, r1.Close()) }()
@@ -282,7 +282,7 @@ func waitMembershipExcludesReplica(
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 
-		current, ok, err := getShardMembership(
+		current, _, ok, err := getShardMembership(
 			ctx,
 			"",
 			address,
@@ -498,8 +498,8 @@ func TestZombieRepro_WithoutFix(t *testing.T) {
 	// is the pre-fix behavior).
 	origFn := getShardMembershipFn
 	defer func() { getShardMembershipFn = origFn }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		return nil, false, nil // shard unknown -> fallback = not a zombie
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
+		return nil, 1, false, nil // shard unknown -> fallback = not a zombie
 	}
 
 	svc3b := restartService3(t, cfg3, obsLogger)

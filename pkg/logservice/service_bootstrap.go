@@ -69,16 +69,16 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	// Honor startReplicas's decision to skip a removed replica or an older
 	// local HAKeeper ID superseded by a newer one. Replaying the configured
 	// initial ID would undo that selection during a cold restart.
-	if s.store.isSkippedZombie(hakeeper.DefaultHAKeeperShardID, replicaID) {
+	members, err := cfg.GetInitHAKeeperMembers()
+	if err != nil {
+		return err
+	}
+	if !s.store.canBootstrapHAKeeper(replicaID, members) {
 		s.runtime.SubLogger(runtime.SystemInit).Warn(
 			"BootstrapHAKeeper: skipping removed or superseded replica",
 			zap.Uint64("shardID", hakeeper.DefaultHAKeeperShardID),
 			zap.Uint64("replicaID", replicaID))
 		return nil
-	}
-	members, err := cfg.GetInitHAKeeperMembers()
-	if err != nil {
-		return err
 	}
 	if err := s.store.startHAKeeperReplica(replicaID, members, false); err != nil {
 		// let's be a little less strict, when HAKeeper replica is already
