@@ -467,14 +467,14 @@ func clusterBySpecTaeBatch(
 		packer.EncodeInt32(r.metric)
 		packer.EncodeDatetime(eventTs)
 
-		tenantVec.Append(int32(0), false)
-		deviceVec.Append(r.device, false)
-		metricVec.Append(r.metric, false)
-		eventVec.Append(eventTs, false)
-		valueVec.Append(r.value, false)
-		qualityVec.Append(r.quality, false)
-		fakePkVec.Append(fakePkBase+uint64(i), false)
-		clusterVec.Append(packer.Bytes(), false)
+		tenantVec.MustAppendValue(int32(0), false)
+		deviceVec.MustAppendValue(r.device, false)
+		metricVec.MustAppendValue(r.metric, false)
+		eventVec.MustAppendValue(eventTs, false)
+		valueVec.MustAppendValue(r.value, false)
+		qualityVec.MustAppendValue(r.quality, false)
+		fakePkVec.MustAppendValue(fakePkBase+uint64(i), false)
+		clusterVec.MustAppendValue(packer.Bytes(), false)
 	}
 
 	// Schema-position order: visible 0..5, fake primary key 6, compound 7.
@@ -516,7 +516,7 @@ func churnTaeBatch(t *testing.T, rows int) *taeContainers.Batch {
 	bat := taeContainers.NewBatch()
 	vec := taeContainers.MakeVector(types.T_int32.ToType(), taeCommon.DefaultAllocator)
 	for i := 0; i < rows; i++ {
-		vec.Append(int32(i), false)
+		vec.MustAppendValue(int32(i), false)
 	}
 	bat.AddVector("v", vec)
 	t.Cleanup(bat.Close)

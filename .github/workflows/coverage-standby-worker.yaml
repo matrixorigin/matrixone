@@ -1,5 +1,7 @@
 name: Coverage standby single-group worker
-run-name: Coverage standby / ${{ fromJSON(inputs.ticket).parent }}/${{ fromJSON(inputs.ticket).attempt }}/${{ fromJSON(inputs.ticket).group }}/${{ fromJSON(inputs.ticket).head }}/${{ inputs.pool }}/${{ fromJSON(inputs.ticket).key }}
+run-name: >-
+  ${{ fromJSON(inputs.ticket).title_version == 2 && format('GROUP{0}', fromJSON(inputs.ticket).group)
+      || format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5}', fromJSON(inputs.ticket).parent, fromJSON(inputs.ticket).attempt, fromJSON(inputs.ticket).group, fromJSON(inputs.ticket).head, inputs.pool, fromJSON(inputs.ticket).key) }}
 on:
   workflow_dispatch:
     inputs:
@@ -10,9 +12,17 @@ permissions:
   actions: read
   pull-requests: read
 jobs:
+  # Actions can leave expressions unevaluated in the name of a skipped call.
+  # Expand the v2 fingerprint on an enabled call. Only its static leaf is skipped.
+  identity:
+    if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && fromJSON(inputs.ticket).title_version == 2
+    name: >-
+      ${{ format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5}', fromJSON(inputs.ticket).parent, fromJSON(inputs.ticket).attempt, fromJSON(inputs.ticket).group, fromJSON(inputs.ticket).head, inputs.pool, fromJSON(inputs.ticket).key) }}
+    permissions: {}
+    uses: ./.github/workflows/coverage-standby-identity.yaml
   cs:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'cs'
-    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@4972bd963f4cc9510266323b14446a8edcda2bfc
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@f64bda11be08c41efc47705acaa41dfe2795d5f5
     with:
       group: ${{ fromJSON(inputs.ticket).group }}
       source: ${{ fromJSON(inputs.ticket).source }}
@@ -27,7 +37,7 @@ jobs:
       CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   idc:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'idc'
-    uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@4972bd963f4cc9510266323b14446a8edcda2bfc
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@f64bda11be08c41efc47705acaa41dfe2795d5f5
     with:
       group: ${{ fromJSON(inputs.ticket).group }}
       source: ${{ fromJSON(inputs.ticket).source }}

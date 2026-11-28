@@ -842,8 +842,8 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 	require.Positive(t, trackingFS.tracked.Load())
 	require.Zero(t, trackingFS.outstanding.Load())
 	require.Len(t, vectors, 1)
-	require.Equal(t, types.BuildTS(42, 0), vectors[0].Get(0))
-	vectors[0].Close()
+	require.Equal(t, types.BuildTS(42, 0), vectors[0].GetValue(0))
+	containers.ReleaseVector(vectors[0])
 }
 
 func TestObjectReadersRejectEmptyLocation(t *testing.T) {
