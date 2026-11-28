@@ -106,6 +106,9 @@ pixi run --frozen -e mo \
 
 The example YAML targets GPU 0 and reserves 2 GiB of GPU memory and 4 GiB of
 host memory. Adjust the configuration for the machine before running it.
+On an NVIDIA DGX Spark, you can pass `"$MO_SRC/etc/launch/sirius-dgx-spark.yaml"`
+as the YAML argument. See the [embedded Sirius guide](docs/guides/sirius-embedded.md#configure-and-query)
+for the profile's shared-memory budgets and how to enable it in MatrixOne.
 
 ## Build MatrixOne with embedded Sirius and GPU operators
 
