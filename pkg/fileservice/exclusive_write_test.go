@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,6 +50,28 @@ func publicationVector(path, data string) IOVector {
 	return IOVector{FilePath: path, Entries: []IOEntry{{Data: []byte(data), Size: int64(len(data))}}}
 }
 
+func TestWriteExclusiveMemoryPublishers(t *testing.T) {
+	fs, err := NewMemoryFS("shared", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(t.Context()) })
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	for _, data := range []string{"A", "B"} {
+		go func(data string) {
+			<-start
+			done <- WriteExclusive(t.Context(), fs, publicationVector("slot", data))
+		}(data)
+	}
+	close(start)
+	first, second := <-done, <-done
+	if first == nil {
+		require.True(t, moerr.IsMoErrCode(second, moerr.ErrFileAlreadyExists))
+	} else {
+		require.True(t, moerr.IsMoErrCode(first, moerr.ErrFileAlreadyExists))
+		require.NoError(t, second)
+	}
+}
+
 // One-byte manifests and channel barriers force the old publisher to resume
 // after the winner has published. No scheduler timing determines the oracle.
 func TestWriteExclusiveDelayedPublisher(t *testing.T) {
@@ -75,6 +98,45 @@ func TestWriteExclusiveDelayedPublisher(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	require.NoError(t, WriteExclusive(context.Background(), fs, publicationVector("other/manifest.json", "C")))
+}
+
+func TestWriteExclusiveDelayedLocalPublisher(t *testing.T) {
+	for _, backend := range []string{"DISK", "DISK-V2"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := t.Context()
+			root := t.TempDir()
+			fs, err := NewFileService(ctx, Config{Name: "shared", Backend: backend, DataDir: root}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			require.NoError(t, CheckExclusiveWrite(fs))
+
+			r := &publicationReader{Reader: bytes.NewBufferString("A"), entered: make(chan struct{}), release: make(chan struct{})}
+			var release sync.Once
+			defer release.Do(func() { close(r.release) })
+			const name = "artifacts/source"
+			done := make(chan error, 1)
+			go func() {
+				done <- WriteExclusive(ctx, fs, IOVector{FilePath: name, Entries: []IOEntry{{ReaderForWrite: r, Size: 1}}})
+			}()
+			select {
+			case err := <-done:
+				t.Fatalf("publisher stopped before reaching temporary write: %v", err)
+			case <-r.entered:
+			}
+			winner := WriteExclusive(ctx, fs, publicationVector(name, "B"))
+			release.Do(func() { close(r.release) })
+			loser := <-done
+			require.NoError(t, winner)
+			require.True(t, moerr.IsMoErrCode(loser, moerr.ErrFileAlreadyExists), "%v", loser)
+			v := &IOVector{FilePath: name, Entries: []IOEntry{{Size: 1}}}
+			defer v.Release()
+			require.NoError(t, fs.Read(ctx, v))
+			require.Equal(t, []byte("B"), v.Entries[0].Data)
+			temps, err := filepath.Glob(filepath.Join(root, ".tmp.*"))
+			require.NoError(t, err)
+			require.Empty(t, temps)
+		})
+	}
 }
 
 func TestWriteExclusiveFilesystemAliases(t *testing.T) {
@@ -119,6 +181,53 @@ func TestWriteExclusiveFilesystemAliases(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	require.NoError(t, err)
 	require.Equal(t, "winner", string(data))
+}
+
+func TestSyncLocalRootForPublicationRetriesAncestorSync(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	parent := filepath.Join(base, "new-parent")
+	root := filepath.Join(parent, "storage")
+	require.NoError(t, os.MkdirAll(root, 0700))
+	syncFailure := errors.New("directory sync failed")
+	for _, fail := range []bool{true, true, false} {
+		var dirs []string
+		err := syncLocalRootForPublication(t.Context(), root, func(dir *os.File) error {
+			dirs = append(dirs, dir.Name())
+			if fail && dir.Name() == base {
+				return syncFailure
+			}
+			return dir.Sync()
+		})
+		require.GreaterOrEqual(t, len(dirs), 3)
+		require.Equal(t, []string{root, parent, base}, dirs[:3])
+		if fail {
+			require.ErrorIs(t, err, syncFailure)
+			require.DirExists(t, root, "a visible root does not prove a successful directory sync")
+		} else {
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestSyncLocalFileForPublicationResolvesWithinRoot(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	fs, err := NewLocalETLFS("etl", root)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	target := filepath.Join(root, "storage")
+	require.NoError(t, os.Mkdir(target, 0700))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "alias")))
+	sub := SubPath(fs, "alias")
+	require.NoError(t, WriteExclusive(ctx, sub, publicationVector("manifest", "content")))
+	require.NoError(t, SyncLocalFileForPublication(ctx, sub, "manifest"))
+
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "manifest"), []byte("outside"), 0600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "outside")))
+	err = SyncLocalFileForPublication(ctx, fs, "outside/manifest")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath), "%v", err)
 }
 
 func TestWriteExclusiveObjectStorage(t *testing.T) {

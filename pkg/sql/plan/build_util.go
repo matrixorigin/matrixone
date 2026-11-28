@@ -134,6 +134,23 @@ func GetFunctionArgTypeStrFromAst(arg tree.FunctionArg) (string, error) {
 	return GetFunctionTypeStrFromAst(argDecl.Type)
 }
 
+// GetFunctionTypeFromAst retains the full type attributes needed by external
+// routine ABIs. GetFunctionTypeStrFromAst intentionally returns only the
+// logical catalog name for legacy UDF overload identity.
+func GetFunctionTypeFromAst(typRef tree.ResolvableTypeReference) (types.Type, error) {
+	typ, err := getTypeFromAst(moerr.Context(), typRef)
+	if err != nil {
+		return types.Type{}, err
+	}
+	// The external routine descriptor has no numeric-attribute channel. Reject
+	// attributed DECIMAL declarations before narrowing to types.Type, whose
+	// native layout deliberately does not carry these plan-side flags.
+	if typ.NumericAttributes != 0 {
+		return types.Type{}, moerr.NewNotSupportedNoCtx("Python UDF does not support attributed DECIMAL declarations")
+	}
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)), nil
+}
+
 func GetFunctionTypeStrFromAst(typRef tree.ResolvableTypeReference) (string, error) {
 	typ, err := getTypeFromAst(moerr.Context(), typRef)
 	if err != nil {

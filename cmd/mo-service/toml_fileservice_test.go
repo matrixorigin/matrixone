@@ -21,6 +21,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +31,34 @@ import (
 var knownFileServiceBackends = map[string]bool{
 	"MEM": true, "DISK": true, "DISK-V2": true,
 	"DISK-ETL": true, "DISK-TMP": true, "S3": true, "MINIO": true,
+}
+
+func TestBundledPythonWorkerLaunchPublishesArtifacts(t *testing.T) {
+	configPath := filepath.Join("..", "..", "etc", "launch-with-python-udf-worker", "cn.toml")
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var cfg Config
+	require.NoError(t, parseFromString(string(data), &cfg))
+
+	for _, config := range cfg.FileServices {
+		if config.Name != defines.SharedFileServiceName {
+			continue
+		}
+		config.DataDir = t.TempDir()
+		fs, err := fileservice.NewFileService(t.Context(), config, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { fs.Close(t.Context()) })
+		store, err := python.NewFileArtifactStore(fs, python.DefaultMaxArtifactBytes)
+		require.NoError(t, err)
+		const source = "def f(ctx): return 1"
+		digest, err := store.Publish(t.Context(), 7, "f", source)
+		require.NoError(t, err)
+		resolved, err := store.Resolve(t.Context(), 7, "f", digest)
+		require.NoError(t, err)
+		require.Equal(t, source, resolved)
+		return
+	}
+	t.Fatal("bundled Python worker launch has no shared file service")
 }
 
 func launchTomlFiles(t *testing.T, patterns ...string) []string {

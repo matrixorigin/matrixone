@@ -16,6 +16,7 @@ package lockop
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -100,7 +101,13 @@ func LockRowsForFixedSnapshotAdmissionResult(
 		return lock.Result{}, moerr.NewLockTableBindChangedNoCtx()
 	}
 	if proc.GetTxnOperator().Txn().SnapshotTS.Less(result.Timestamp) {
-		return lock.Result{}, moerr.NewTxnWWConflict(ctx, tableID, "catalog namespace snapshot is stale")
+		// Keep the fixed snapshot and grant that rejected admission together.
+		// The binding identifies the lock service, not the committing writer.
+		reason := fmt.Sprintf("catalog namespace snapshot is stale (snapshot=%s, grant=%s, lock-service=%q, binding-version=%d, group=%d, has-conflict=%t, has-prev-commit=%t)",
+			proc.GetTxnOperator().Txn().SnapshotTS.DebugString(), result.Timestamp.DebugString(),
+			result.LockedOn.ServiceID, result.LockedOn.Version, result.LockedOn.Group,
+			result.HasConflict, result.HasPrevCommit)
+		return lock.Result{}, moerr.NewTxnWWConflict(ctx, tableID, reason)
 	}
 	return result, nil
 }

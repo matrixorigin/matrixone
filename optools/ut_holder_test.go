@@ -44,7 +44,9 @@ func TestUTAdmissionHolderEvidence(t *testing.T) {
 			if err := os.WriteFile(path, []byte(strings.Join(tt.events, "\n")), 0600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+			cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+			cmd.Env = pythonStdlibEnvironment()
+			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("summary: %v\n%s", err, out)
 			}
@@ -66,7 +68,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err != nil || !strings.Contains(string(out), "fixture=shared-cluster phase=start count=1 total=1.00s") {
 			t.Fatalf("aggregate without package/time: %v\n%s", err, out)
 		}
@@ -77,7 +81,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err != nil || len(out) != 0 {
 			t.Fatalf("holder-only report should be silent: %v\n%s", err, out)
 		}
@@ -88,7 +94,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err != nil || !strings.Contains(string(out), "fixture=embedded-cluster phase=admission-acquire count=1") || strings.Contains(string(out), "admission generations:") {
 			t.Fatalf("invalid time must affect only holder evidence: %v\n%s", err, out)
 		}
@@ -98,7 +106,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte{0xff, '\n'}, 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "UnicodeDecodeError") {
 			t.Fatalf("invalid UTF-8 must fail: %v\n%s", err, out)
 		}
@@ -115,7 +125,9 @@ from summarize_ut_setup import admission_holders
 import sys
 assert admission_holders(Path(sys.argv[1])) == []
 `
-	out, err := exec.Command("python3", "-c", script, path).CombinedOutput()
+	cmd := exec.Command("python3", "-c", script, path)
+	cmd.Env = pythonStdlibEnvironment()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("standalone helper must ignore malformed numbers: %v\n%s", err, out)
 	}
@@ -164,7 +176,9 @@ raise SystemExit(status)
 			if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command("python3", "-c", script, path, tc.wantOpens).CombinedOutput()
+			cmd := exec.Command("python3", "-c", script, path, tc.wantOpens)
+			cmd.Env = pythonStdlibEnvironment()
+			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("summary fallback: %v\n%s", err, out)
 			}
@@ -204,7 +218,9 @@ raise SystemExit(result)
 			if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command("python3", "-c", script, path).CombinedOutput()
+			cmd := exec.Command("python3", "-c", script, path)
+			cmd.Env = pythonStdlibEnvironment()
+			out, err := cmd.CombinedOutput()
 			if !hasTotals {
 				if err != nil || len(out) != 0 {
 					t.Fatalf("no totals should be silent: %v\n%s", err, out)
@@ -221,4 +237,75 @@ raise SystemExit(result)
 			}
 		})
 	}
+}
+
+func TestPythonStdlibEnvironmentUsesConfiguredRuntimeLibraryPath(t *testing.T) {
+	t.Setenv("pythonLocation", "/python/toolcache")
+	t.Setenv("LD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("DYLD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("DYLD_FALLBACK_LIBRARY_PATH", "/matrixone/thirdparties/lib")
+	t.Setenv("PYTHONPATH", "/matrixone/python")
+	t.Setenv("PYTHONHOME", "/matrixone/python-home")
+	t.Setenv("PYTHONUSERBASE", "/matrixone/user-site")
+	t.Setenv("PYTHONSTARTUP", "/matrixone/startup.py")
+	t.Setenv("PYTHONINSPECT", "1")
+	t.Setenv("MO_UT_ENV_SENTINEL", "preserved")
+
+	env := pythonStdlibEnvironment()
+	values := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, _ := strings.Cut(entry, "=")
+		values[key] = value
+	}
+	if values["PATH"] == "" {
+		t.Fatal("sanitized Python environment lost PATH")
+	}
+	if got, want := values["MO_UT_ENV_SENTINEL"], "preserved"; got != want {
+		t.Fatalf("sanitized Python environment changed unrelated variable: got %q, want %q", got, want)
+	}
+	if got, want := values["LD_LIBRARY_PATH"], filepath.Join("/python/toolcache", "lib"); got != want {
+		t.Fatalf("Python runtime loader path = %q, want %q", got, want)
+	}
+	for _, forbidden := range []string{
+		"DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
+		"PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONSTARTUP", "PYTHONINSPECT",
+	} {
+		if _, ok := values[forbidden]; ok {
+			t.Fatalf("Python stdlib helper inherited %q", forbidden)
+		}
+	}
+}
+
+func TestPythonStdlibEnvironmentDropsNativeLoaderPathWithoutPythonLocation(t *testing.T) {
+	t.Setenv("pythonLocation", "")
+	t.Setenv("LD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("DYLD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("DYLD_FALLBACK_LIBRARY_PATH", "/matrixone/thirdparties/lib")
+	for _, entry := range pythonStdlibEnvironment() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH":
+			t.Fatalf("Python stdlib helper inherited native loader variable %q", key)
+		}
+	}
+}
+
+// pythonStdlibEnvironment keeps the configured interpreter's matching runtime
+// library available while preventing MatrixOne's native libraries and Python
+// import overrides from changing a standard-library-only report parser.
+func pythonStdlibEnvironment() []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE", "PYTHONSTARTUP", "PYTHONINSPECT":
+			continue
+		default:
+			env = append(env, entry)
+		}
+	}
+	if pythonLocation := os.Getenv("pythonLocation"); pythonLocation != "" {
+		env = append(env, "LD_LIBRARY_PATH="+filepath.Join(pythonLocation, "lib"))
+	}
+	return env
 }

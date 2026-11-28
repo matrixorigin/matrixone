@@ -17,6 +17,8 @@ package fileservice
 import (
 	"context"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -33,7 +35,10 @@ func CheckExclusiveWrite(fs FileService) error {
 	switch f := fs.(type) {
 	case *subPathFS:
 		return CheckExclusiveWrite(f.upstream)
-	case *LocalETLFS:
+	case *LocalFS, *LocalETLFS:
+		return nil
+	case *MemoryFS:
+		// Write holds the same mutex across existence checking and insertion.
 		return nil
 	case *S3FS:
 		switch storage := f.rawStorage.(type) {
@@ -53,6 +58,145 @@ func CheckExclusiveWrite(fs FileService) error {
 		}
 	}
 	return moerr.NewNotSupportedNoCtxf("exclusive publication for %T", fs)
+}
+
+// linkLocalFile publishes a complete temporary file without replacing an
+// existing name, using the filesystem's own alias equivalence.
+func linkLocalFile(tempPath, nativePath, logicalPath string) error {
+	err := os.Link(tempPath, nativePath)
+	if os.IsExist(err) {
+		return moerr.NewFileAlreadyExistsNoCtx(logicalPath)
+	}
+	return err
+}
+
+func localPublicationPaths(fs FileService) (string, func(string) string) {
+	switch f := fs.(type) {
+	case *LocalFS:
+		return f.rootPath, f.toNativeFilePath
+	case *LocalETLFS:
+		return f.rootPath, f.toNativeFilePath
+	case *S3FS:
+		if storage, ok := f.rawStorage.(*diskObjectStorage); ok {
+			return storage.path, func(file string) string {
+				return filepath.Join(storage.path, f.pathToKey(file))
+			}
+		}
+	}
+	return "", nil
+}
+
+// SyncLocalRootForPublication syncs a local storage root and the directories
+// that contain it. Constructors may create the root without opening those
+// directories. Recheck on every publication because a visible root does not
+// prove its parent entries were synced, including after a restart.
+// Non-local services retain their own persistence semantics.
+func SyncLocalRootForPublication(ctx context.Context, fs FileService) error {
+	for {
+		sub, ok := fs.(*subPathFS)
+		if !ok {
+			break
+		}
+		fs = sub.upstream
+	}
+	rootPath, nativePath := localPublicationPaths(fs)
+	if nativePath == nil {
+		return nil
+	}
+	return syncLocalRootForPublication(ctx, rootPath, (*os.File).Sync)
+}
+
+func syncLocalRootForPublication(ctx context.Context, rootPath string, syncDirectory func(*os.File) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	root, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return err
+	}
+	for dir := root; ; dir = filepath.Dir(dir) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		file, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		err = syncDirectory(file)
+		_ = file.Close()
+		if err != nil {
+			return err
+		}
+		if filepath.Dir(dir) == dir {
+			return nil
+		}
+	}
+}
+
+// SyncLocalFileForPublication syncs an immutable local object and its
+// directories within the storage root. A visible link can survive a failed
+// directory sync, so this also applies to retries that find the object.
+// Non-local services retain their own persistence semantics.
+func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath string) error {
+	if sub, ok := fs.(*subPathFS); ok {
+		upstreamPath, err := sub.toUpstreamFilePath(filePath)
+		if err != nil {
+			return err
+		}
+		return SyncLocalFileForPublication(ctx, sub.upstream, upstreamPath)
+	}
+
+	rootPath, nativePath := localPublicationPaths(fs)
+	if nativePath == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(filePath, fs.Name())
+	if err != nil {
+		return err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return err
+	}
+	name, err := filepath.EvalSymlinks(nativePath(path.File))
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(resolvedRoot, name)
+	if err != nil || relative == "." || !filepath.IsLocal(relative) {
+		return moerr.NewInvalidPathNoCtx(path.File)
+	}
+	root, err := os.OpenRoot(resolvedRoot)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	// Sync the inode first, then each directory up to and including the
+	// storage root. This also repairs a retry after an interrupted mkdir.
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := syncPublicationPath(root, relative); err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		relative = filepath.Dir(relative)
+	}
+}
+
+func syncPublicationPath(root *os.Root, name string) error {
+	file, err := root.Open(name)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
 }
 
 // Match S3 API endpoints, optionally prefixed by a virtual-hosted bucket.

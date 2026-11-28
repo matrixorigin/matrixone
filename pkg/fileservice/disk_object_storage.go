@@ -55,11 +55,8 @@ func newDiskObjectStorage(
 	if err != nil {
 		return nil, err
 	}
-
-	if err := os.MkdirAll(path, 0755); err != nil {
-		if !os.IsExist(err) {
-			return nil, err
-		}
+	if err := os.MkdirAll(path, 0755); err != nil && !os.IsExist(err) {
+		return nil, err
 	}
 
 	return &diskObjectStorage{
