@@ -805,6 +805,133 @@ func TestJsonObjectAggIntermediateRoundTrip(t *testing.T) {
 	restored.Free()
 }
 
+func TestJSONOpaqueAggregateIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	arrayInfo := multiAggInfo{
+		aggID:     AggIdOfJsonArrayAgg,
+		argTypes:  []types.Type{types.T_varbinary.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	values := vector.NewVec(types.T_varbinary.ToType(), mp)
+	require.NoError(t, vector.AppendBytes(values, []byte{0, 0xff, 'A'}, false, mp))
+	require.NoError(t, vector.AppendBytes(values, []byte{}, false, mp))
+
+	array := newJsonArrayAggExec(mp, arrayInfo)
+	require.NoError(t, array.GroupGrow(1))
+	require.NoError(t, array.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
+	var arrayWire bytes.Buffer
+	require.NoError(t, array.SaveIntermediateResult(1, [][]uint8{{1}}, &arrayWire))
+
+	arrayRestored := newJsonArrayAggExec(mp, arrayInfo)
+	require.NoError(t, arrayRestored.UnmarshalFromReader(
+		bytes.NewReader(arrayWire.Bytes()), mp))
+	arrayResult, err := arrayRestored.Flush()
+	require.NoError(t, err)
+	require.Len(t, arrayResult, 1)
+	arrayJSON, err := types.DecodeJson(arrayResult[0].GetBytesAt(0)).MarshalJSON()
+	require.NoError(t, err)
+	require.JSONEq(t, `["base64:type15:AP9B","base64:type15:"]`, string(arrayJSON))
+
+	key := vector.NewVec(types.T_varchar.ToType(), mp)
+	bitValues := vector.NewVec(types.New(types.T_bit, 8, 0), mp)
+	require.NoError(t, vector.AppendBytes(key, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(key, []byte("b"), false, mp))
+	require.NoError(t, vector.AppendFixedList(bitValues, []uint64{0xaa, 7}, nil, mp))
+	objectInfo := multiAggInfo{
+		aggID:     AggIdOfJsonObjectAgg,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.New(types.T_bit, 8, 0)},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	object := newJsonObjectAggExec(mp, objectInfo)
+	require.NoError(t, object.GroupGrow(1))
+	require.NoError(t, object.BatchFill(0, []uint64{1, 1}, []*vector.Vector{key, bitValues}))
+	var objectWire bytes.Buffer
+	require.NoError(t, object.SaveIntermediateResult(1, [][]uint8{{1}}, &objectWire))
+
+	objectRestored := newJsonObjectAggExec(mp, objectInfo)
+	require.NoError(t, objectRestored.UnmarshalFromReader(
+		bytes.NewReader(objectWire.Bytes()), mp))
+	objectResult, err := objectRestored.Flush()
+	require.NoError(t, err)
+	require.Len(t, objectResult, 1)
+	objectJSON, err := types.DecodeJson(objectResult[0].GetBytesAt(0)).MarshalJSON()
+	require.NoError(t, err)
+	require.JSONEq(t, `{"a":"base64:type16:qg==","b":"base64:type16:Bw=="}`, string(objectJSON))
+
+	arrayResult[0].Free(mp)
+	objectResult[0].Free(mp)
+	values.Free(mp)
+	key.Free(mp)
+	bitValues.Free(mp)
+	array.Free()
+	arrayRestored.Free()
+	object.Free()
+	objectRestored.Free()
+}
+
+func TestJSONOpaqueArrayDistinctUsesSourceValueEquality(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	tests := []struct {
+		name     string
+		typ      types.Type
+		append   func(*vector.Vector)
+		wantJSON string
+	}{
+		{
+			name: "varbinary", typ: types.T_varbinary.ToType(),
+			append: func(v *vector.Vector) {
+				require.NoError(t, vector.AppendBytes(v, []byte{0, 0xff}, false, mp))
+				require.NoError(t, vector.AppendBytes(v, []byte{0, 0xff}, false, mp))
+				require.NoError(t, vector.AppendBytes(v, []byte{0}, false, mp))
+			},
+			wantJSON: `["base64:type15:AP8=","base64:type15:AA=="]`,
+		},
+		{
+			name: "bit", typ: types.New(types.T_bit, 8, 0),
+			append: func(v *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(v, uint64(0xaa), false, mp))
+				require.NoError(t, vector.AppendFixed(v, uint64(0xaa), false, mp))
+				require.NoError(t, vector.AppendFixed(v, uint64(7), false, mp))
+			},
+			wantJSON: `["base64:type16:qg==","base64:type16:Bw=="]`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			values := vector.NewVec(tc.typ, mp)
+			tc.append(values)
+			exec := newJsonArrayAggExec(mp, multiAggInfo{
+				aggID: AggIdOfJsonArrayAgg, distinct: true,
+				argTypes: []types.Type{tc.typ}, retType: types.T_json.ToType(),
+				emptyNull: true,
+			})
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BatchFill(0,
+				[]uint64{1, 1, 1}, []*vector.Vector{values}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			got, err := types.DecodeJson(result[0].GetBytesAt(0)).MarshalJSON()
+			require.NoError(t, err)
+			require.JSONEq(t, tc.wantJSON, string(got))
+			result[0].Free(mp)
+			exec.Free()
+			values.Free(mp)
+		})
+	}
+}
+
 func TestMedianIntermediateRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {

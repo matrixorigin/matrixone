@@ -508,9 +508,8 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64, locations ...*time.L
 	case types.T_char, types.T_varchar, types.T_text:
 		length := len(vec.GetBytesAt(int(row)))
 		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return 0, moerr.NewInvalidInputNoCtxf(
-			"binary data not supported json aggregate: %v", typ.String())
+	case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+		return jsonvalue.OpaqueValueSize(context.Background(), vec, int(row))
 	case types.T_uuid:
 		return 1 + jsonUvarintSize(36) + 36, nil
 	case types.T_json:
@@ -679,9 +678,8 @@ func appendJSONAggregateValue(
 	case types.T_char, types.T_varchar, types.T_text:
 		dst = append(dst, bytejson.TpCodeString)
 		return appendJSONBinaryString(dst, vec.GetBytesAt(int(row))), nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"binary data not supported json aggregate: %v", typ.String())
+	case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+		return jsonvalue.AppendOpaqueValue(context.Background(), dst, vec, int(row))
 	case types.T_uuid:
 		value := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[row].String()
 		dst = append(dst, bytejson.TpCodeString)
@@ -1250,8 +1248,8 @@ func buildValueByteJsonWithLocation(vec *vector.Vector, row uint64, loc *time.Lo
 		val := vector.GenerateFunctionStrParameter(vec)
 		data, _ := val.GetStrValue(row)
 		return bytejson.CreateByteJSONWithCheck(string(data))
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("binary data not supported json aggregate: %v", typ.String())
+	case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+		return jsonvalue.BuildOpaqueValue(context.Background(), vec, int(row))
 	case types.T_array_float32:
 		val := vector.GenerateFunctionStrParameter(vec)
 		data, _ := val.GetStrValue(row)

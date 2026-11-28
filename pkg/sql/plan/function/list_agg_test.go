@@ -440,12 +440,21 @@ func TestJSONObjectAggKeyTypeBoundaries(t *testing.T) {
 	}
 
 	for _, valueType := range []types.Type{
+		types.New(types.T_bit, 1, 0),
+		types.New(types.T_bit, 8, 0),
+		types.New(types.T_bit, 64, 0),
 		types.T_binary.ToType(),
 		types.T_varbinary.ToType(),
 		types.T_blob.ToType(),
 	} {
-		_, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{types.T_int64.ToType(), valueType})
-		require.Error(t, err)
+		t.Run("value/"+valueType.Oid.String(), func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{types.T_int64.ToType(), valueType})
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{types.T_varchar.ToType(), valueType}, targets)
+			require.Equal(t, types.T_json, resolved.GetReturnType().Oid)
+		})
 	}
 
 	for _, inputs := range [][]types.Type{
@@ -455,5 +464,50 @@ func TestJSONObjectAggKeyTypeBoundaries(t *testing.T) {
 	} {
 		_, err := GetFunctionByName(ctx, "json_objectagg", inputs)
 		require.Error(t, err)
+	}
+}
+
+func TestJSONArrayAggOpaqueValueTypeCheck(t *testing.T) {
+	for _, valueType := range []types.Type{
+		types.New(types.T_bit, 1, 0),
+		types.New(types.T_bit, 8, 0),
+		types.New(types.T_bit, 64, 0),
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+	} {
+		t.Run(valueType.Oid.String(), func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "json_arrayagg", []types.Type{valueType})
+			require.NoError(t, err)
+			require.Equal(t, types.T_json, resolved.GetReturnType().Oid)
+			_, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast, "opaque value type must retain its OID and width")
+		})
+	}
+}
+
+func TestJSONAggregatesWidenLowPrecisionValues(t *testing.T) {
+	for _, tc := range []struct {
+		input types.Type
+		want  types.Type
+	}{
+		{types.T_float16.ToType(), types.T_float32.ToType()},
+		{types.New(types.T_array_float8, 32, 0), types.New(types.T_array_float32, 32, 0)},
+	} {
+		t.Run(tc.input.Oid.String(), func(t *testing.T) {
+			ctx := context.Background()
+			array, err := GetFunctionByName(ctx, "json_arrayagg", []types.Type{tc.input})
+			require.NoError(t, err)
+			targets, shouldCast := array.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{tc.want}, targets)
+
+			key := types.T_varchar.ToType()
+			object, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{key, tc.input})
+			require.NoError(t, err)
+			targets, shouldCast = object.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{key, tc.want}, targets)
+		})
 	}
 }

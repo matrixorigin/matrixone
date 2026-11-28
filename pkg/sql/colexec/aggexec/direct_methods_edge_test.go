@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -600,10 +601,30 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 	} {
 		vec := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte{1}, false, mp))
-		_, err := appendJSONAggregateValue(nil, vec, 0)
-		require.Error(t, err)
+		size, err := jsonAggregateValueSize(
+			vec, 0)
+		require.NoError(t, err)
+		encoded, err := appendJSONAggregateValue(
+			make([]byte, 0, size), vec, 0)
+		require.NoError(t, err)
+		require.Len(t, encoded, size)
+		require.Equal(t, bytejson.TpCodeBlob, types.DecodeJson(encoded).Type)
 		vec.Free(mp)
 	}
+	bit := vector.NewVec(types.New(types.T_bit, 8, 0), mp)
+	require.NoError(t, vector.AppendFixed(bit, uint64(0xaa), false, mp))
+	size, err := jsonAggregateValueSize(
+		bit, 0)
+	require.NoError(t, err)
+	encoded, err := appendJSONAggregateValue(
+		make([]byte, 0, size), bit, 0)
+	require.NoError(t, err)
+	require.Len(t, encoded, size)
+	value := types.DecodeJson(encoded)
+	unquoted, err := value.Unquote()
+	require.NoError(t, err)
+	require.Equal(t, "base64:type16:qg==", unquoted)
+	bit.Free(mp)
 
 	arrays := []*vector.Vector{
 		vector.NewVec(types.T_array_float32.ToType(), mp),
