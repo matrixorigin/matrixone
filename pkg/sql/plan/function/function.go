@@ -703,6 +703,9 @@ func getFunctionByName(
 	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
 		check = legacyIntegerDivCheck(args)
 	}
+	if r.fid == DIV && LegacyIntegerFloatDiv(ctx) {
+		check = legacyFloatDivCheck(args)
+	}
 	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
 		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
 			check = legacy

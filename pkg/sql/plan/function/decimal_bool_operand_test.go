@@ -118,7 +118,7 @@ func TestDecimalBoolBinaryTargets(t *testing.T) {
 			switch name {
 			case "+", "-":
 				leftPlain, rightPlain = tc.addSub[0], tc.addSub[1]
-			case "*":
+			case "*", "/":
 				leftPlain, rightPlain = tc.mul[0], tc.mul[1]
 			default:
 				leftPlain, rightPlain = tc.envelope[0], tc.envelope[1]

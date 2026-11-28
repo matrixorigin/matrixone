@@ -87,6 +87,23 @@ func sameMediumIntCommonType(left, right types.Type) bool {
 	return left.Eq(right)
 }
 
+// InferExactDivisionParameterType selects the exact parameter type for an
+// unresolved `?` marker paired with an exact `/` operand so temporal and BOOL
+// peers do not fall back to DOUBLE.
+func InferExactDivisionParameterType(peer types.Type) (types.Type, bool) {
+	if peer.Oid.IsFloat() {
+		return types.T_float64.ToType(), true
+	}
+	if peer.Oid.IsDecimal() || peer.Oid.IsInteger() || peer.Oid == types.T_bit {
+		return InferNumericParameterType([]types.Type{peer}, nil)
+	}
+	if prec, scale, ok := exactDivisionOperandDimensions(peer); ok {
+		oid := commonExactDivisionDecimalOid(peer, peer, prec, prec)
+		return types.New(oid, prec, scale), true
+	}
+	return types.Type{}, false
+}
+
 // InferNumericParameterType selects the computation type for unresolved
 // numeric parameters. known may contain operands from any depth in one
 // arithmetic subtree. Approximate operands dominate exact operands, followed
@@ -289,7 +306,12 @@ func ResolveNumericBinaryTypesWithContext(ctx context.Context, name string, left
 	if !ok {
 		return types.Type{}, types.Type{}, types.Type{}, false
 	}
-	resolved, ok := resolveNumericBinaryTypesMode(op, left, right, outer, LegacyDecimalIntegerDiv(ctx))
+	resolved, ok := resolveNumericBinaryTypesWithOptions(
+		op, left, right, outer,
+		getDivPrecisionIncrement(ctx),
+		LegacyDecimalIntegerDiv(ctx),
+		LegacyIntegerFloatDiv(ctx),
+	)
 	return resolved.left, resolved.right, resolved.result, ok
 }
 
@@ -325,6 +347,17 @@ func resolveNumericBinaryTypes(
 }
 
 func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, outer *types.Type, legacyDecimalDiv bool) (numericTypeResolution, bool) {
+	return resolveNumericBinaryTypesWithOptions(op, left, right, outer, DefaultDivPrecisionIncrement, legacyDecimalDiv, false)
+}
+
+func resolveNumericBinaryTypesWithOptions(
+	op numericBinaryOp,
+	left, right types.Type,
+	outer *types.Type,
+	divIncrement int32,
+	legacyDecimalDiv bool,
+	legacyFloatDiv bool,
+) (numericTypeResolution, bool) {
 	// Resolve the BIT dividend before T_any inference and generic coercion so
 	// its unsigned result domain and declared width are not lost.
 	if op == numericOpIntegerDiv {
@@ -332,7 +365,7 @@ func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, o
 			left, right = bitLeft, bitRight
 		}
 	}
-	left, right, ok := resolveUnknownNumericOperands(left, right, outer)
+	left, right, ok := resolveUnknownNumericOperandsForOp(op, left, right, outer, legacyFloatDiv)
 	if !ok {
 		return numericTypeResolution{}, false
 	}
@@ -384,22 +417,68 @@ func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, o
 			cast, castLeft, castRight = integerDivTypeCastRule(left, right)
 		}
 	case numericOpDiv:
-		cast, castLeft, castRight = fixedTypeCastRule2(left, right)
+		if legacyFloatDiv {
+			cast, castLeft, castRight = fixedTypeCastRule2(left, right)
+		} else {
+			cast, castLeft, castRight = divTypeCastRule(left, right)
+		}
 	default:
 		cast, castLeft, castRight = arithmeticTypeCastRule1(left, right)
 	}
 	if cast {
 		left, right = castLeft, castRight
 	}
-	if !numericOperatorSupports(op, left, right) {
+	supported := numericOperatorSupports(op, left, right)
+	if !supported && op == numericOpDiv && legacyFloatDiv {
+		supported = legacyDivOperatorSupports(left, right)
+	}
+	if !supported {
 		return numericTypeResolution{}, false
 	}
 
 	result := numericBinaryResultType(op, left, right)
+	if op == numericOpDiv && (left.Oid.IsDecimal() || right.Oid.IsDecimal()) {
+		if divResult, ok := decimalDivisionReturnType(original, []types.Type{left, right}, divIncrement); ok {
+			result = divResult
+			if t1, t2, widened := reconcileDivOperandTargets(result, original, []types.Type{left, right}); widened {
+				left, right = t1, t2
+			}
+		}
+	}
 	if op == numericOpMod {
 		result = DecimalModReturnType(original, result)
 	}
 	return numericTypeResolution{left: left, right: right, result: result}, true
+}
+
+func resolveUnknownNumericOperandsForOp(op numericBinaryOp, left, right types.Type, outer *types.Type, legacyFloatDiv bool) (types.Type, types.Type, bool) {
+	if op == numericOpDiv && !legacyFloatDiv {
+		leftExactOrUnknown := left.Oid == types.T_any || IsExactDivisionOperand(left.Oid)
+		rightExactOrUnknown := right.Oid == types.T_any || IsExactDivisionOperand(right.Oid)
+		if leftExactOrUnknown && rightExactOrUnknown {
+			if left.Oid != types.T_any && right.Oid != types.T_any {
+				return left, right, true
+			}
+			if !(left.Oid == types.T_any && right.Oid == types.T_any) {
+				peer := left
+				if peer.Oid == types.T_any {
+					peer = right
+				}
+				hint, ok := InferExactDivisionParameterType(peer)
+				if !ok {
+					return types.Type{}, types.Type{}, false
+				}
+				if left.Oid == types.T_any {
+					left = hint
+				}
+				if right.Oid == types.T_any {
+					right = hint
+				}
+				return left, right, true
+			}
+		}
+	}
+	return resolveUnknownNumericOperands(left, right, outer)
 }
 
 func resolveUnknownNumericOperands(left, right types.Type, outer *types.Type) (types.Type, types.Type, bool) {

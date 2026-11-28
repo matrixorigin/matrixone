@@ -104,7 +104,7 @@ func TestSelectDivisionByZeroWarnings(t *testing.T) {
 		checkWarnings(0)
 		query("SELECT 1/0, 1 DIV 0, MOD(1,0)")
 		checkWarnings(3)
-		require.Equal(t, [][]string{{"7"}}, query("SELECT COALESCE(1/0,7)"))
+		require.Equal(t, [][]string{{"7.0000"}}, query("SELECT COALESCE(1/0,7)"))
 		checkWarnings(1)
 
 		// Prepare while warnings are disabled, then exercise the same plan under
@@ -115,7 +115,7 @@ func TestSelectDivisionByZeroWarnings(t *testing.T) {
 		exec("SET @divisor=0")
 		for _, mode := range []string{"", "ERROR_FOR_DIVISION_BY_ZERO", "", "TRADITIONAL"} {
 			exec("SET SESSION sql_mode='" + mode + "'")
-			require.Equal(t, [][]string{{"7", "7"}}, query("EXECUTE div_warning USING @divisor"))
+			require.Equal(t, [][]string{{"7.0000", "7"}}, query("EXECUTE div_warning USING @divisor"))
 			want := 0
 			if mode != "" {
 				want = 2
@@ -150,13 +150,17 @@ func TestSelectDivisionByZeroWarnings(t *testing.T) {
 		exec("INSERT INTO select_division_warning_remote.local_rows VALUES(1),(2),(3)")
 		for _, expression := range []string{"1/0", "1 DIV 0", "MOD(1,0)"} {
 			t.Log("row diagnostics", expression)
+			fallback := "7"
+			if expression == "1/0" {
+				fallback = "7.0000"
+			}
 			require.Equal(t, [][]string{{"NULL"}, {"NULL"}, {"NULL"}}, query("SELECT "+expression+" FROM select_division_warning_remote.local_rows ORDER BY id"))
 			checkWarnings(3)
-			require.Equal(t, [][]string{{"NULL"}, {"NULL"}, {"7"}}, query("SELECT IF(id<=2,"+expression+",7) FROM select_division_warning_remote.local_rows ORDER BY id"))
+			require.Equal(t, [][]string{{"NULL"}, {"NULL"}, {fallback}}, query("SELECT IF(id<=2,"+expression+",7) FROM select_division_warning_remote.local_rows ORDER BY id"))
 			checkWarnings(2)
-			require.Equal(t, [][]string{{"7"}, {"NULL"}, {"NULL"}}, query("SELECT CASE WHEN id>=2 THEN "+expression+" ELSE 7 END FROM select_division_warning_remote.local_rows ORDER BY id"))
+			require.Equal(t, [][]string{{fallback}, {"NULL"}, {"NULL"}}, query("SELECT CASE WHEN id>=2 THEN "+expression+" ELSE 7 END FROM select_division_warning_remote.local_rows ORDER BY id"))
 			checkWarnings(2)
-			require.Equal(t, [][]string{{"7"}, {"7"}, {"7"}}, query("SELECT COALESCE("+expression+",7) FROM select_division_warning_remote.local_rows ORDER BY id"))
+			require.Equal(t, [][]string{{fallback}, {fallback}, {fallback}}, query("SELECT COALESCE("+expression+",7) FROM select_division_warning_remote.local_rows ORDER BY id"))
 			checkWarnings(3)
 			query("SELECT " + expression + " FROM select_division_warning_remote.local_rows WHERE FALSE")
 			checkWarnings(0)

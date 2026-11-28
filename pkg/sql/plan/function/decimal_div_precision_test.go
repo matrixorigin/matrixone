@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -541,4 +542,418 @@ func BenchmarkDecimal256DivisionScaleCap(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestExactDivisionFullTypeAndIncrementMatrix(t *testing.T) {
+	exactInputs := []struct {
+		name      string
+		typ       types.Type
+		precision int32
+		scale     int32
+	}{
+		{"int8", types.T_int8.ToType(), 3, 0},
+		{"int16", types.T_int16.ToType(), 5, 0},
+		{"int32", types.T_int32.ToType(), 10, 0},
+		{"int64", types.T_int64.ToType(), 19, 0},
+		{"uint8", types.T_uint8.ToType(), 3, 0},
+		{"uint16", types.T_uint16.ToType(), 5, 0},
+		{"uint32", types.T_uint32.ToType(), 10, 0},
+		{"uint64", types.T_uint64.ToType(), 20, 0},
+		{"bool", types.T_bool.ToType(), 1, 0},
+		{"bit", types.New(types.T_bit, 64, 0), 20, 0},
+		{"date", types.T_date.ToType(), 8, 0},
+		{"year", types.T_year.ToType(), 4, 0},
+		{"time(0)", types.New(types.T_time, 0, 0), 14, 0},
+		{"time(6)", types.New(types.T_time, 0, 6), 20, 6},
+		{"datetime(0)", types.New(types.T_datetime, 0, 0), 14, 0},
+		{"datetime(6)", types.New(types.T_datetime, 0, 6), 20, 6},
+		{"timestamp(0)", types.New(types.T_timestamp, 0, 0), 14, 0},
+		{"timestamp(6)", types.New(types.T_timestamp, 0, 6), 20, 6},
+	}
+
+	for _, left := range exactInputs {
+		for _, right := range exactInputs {
+			for _, inc := range []int32{0, 4, 10, 30} {
+				wantScale := min32(left.scale+inc, maxDecimalDivisionScale)
+				wantPrec := max32(min32(left.precision+right.scale+inc, maxDecimalDivisionPrecision), wantScale)
+				wantOid := types.T_decimal128
+				if wantPrec > 38 {
+					wantOid = types.T_decimal256
+				}
+				ctx := WithDivPrecisionIncrement(context.Background(), inc)
+				resolved, err := GetFunctionByName(ctx, "/", []types.Type{left.typ, right.typ})
+				require.NoError(t, err, "%s / %s (inc=%d)", left.name, right.name, inc)
+				require.Equal(t, types.New(wantOid, wantPrec, wantScale), resolved.GetReturnType(), "%s / %s (inc=%d)", left.name, right.name, inc)
+				if targets, needCast := resolved.ShouldDoImplicitTypeCast(); needCast {
+					require.True(t, IfTypeCastSupported(left.typ.Oid, targets[0].Oid), "cast %s -> %s", left.name, targets[0].Oid)
+					require.True(t, IfTypeCastSupported(right.typ.Oid, targets[1].Oid), "cast %s -> %s", right.name, targets[1].Oid)
+				}
+			}
+		}
+	}
+
+	// Exact / NULL and NULL / Exact promote to DECIMAL, while NULL / NULL stays DOUBLE.
+	for _, exact := range []types.Type{types.T_int32.ToType(), types.T_int64.ToType(), types.T_bit.ToType(), types.T_bool.ToType(), types.T_year.ToType()} {
+		for _, pair := range [][]types.Type{{exact, types.T_any.ToType()}, {types.T_any.ToType(), exact}} {
+			resolved, err := GetFunctionByName(context.Background(), "/", pair)
+			require.NoError(t, err)
+			require.True(t, resolved.GetReturnType().Oid.IsDecimal(), "%v", pair)
+		}
+	}
+	nullPair, err := GetFunctionByName(context.Background(), "/", []types.Type{types.T_any.ToType(), types.T_any.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_float64, nullPair.GetReturnType().Oid)
+
+	// Approximate / string / JSON / ENUM / low-precision float / vector / BIT+float controls stay non-decimal.
+	for _, pair := range [][]types.Type{
+		{types.T_int64.ToType(), types.T_float32.ToType()},
+		{types.T_int64.ToType(), types.T_float64.ToType()},
+		{types.T_int64.ToType(), types.T_bf16.ToType()},
+		{types.T_int64.ToType(), types.T_float16.ToType()},
+		{types.T_int64.ToType(), types.T_float8.ToType()},
+		{types.T_int64.ToType(), types.T_float4.ToType()},
+		{types.T_int64.ToType(), types.T_varchar.ToType()},
+		{types.T_int64.ToType(), types.T_json.ToType()},
+		{types.New(types.T_bit, 64, 0), types.T_float64.ToType()},
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "/", pair)
+		require.NoError(t, err)
+		require.Equal(t, types.T_float64, resolved.GetReturnType().Oid, "%v", pair)
+	}
+	// ENUM has no direct binary cast rule in fixedBinaryCastRule2; binder casts ENUM before `/`
+	// (unchanged from fixedTypeCastRule2).
+	_, enumErr := GetFunctionByName(context.Background(), "/", []types.Type{types.T_int64.ToType(), types.T_enum.ToType()})
+	require.Error(t, enumErr)
+	intDivPair, err := GetFunctionByName(context.Background(), "div", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, intDivPair.GetReturnType().Oid)
+	f32Pair, err := GetFunctionByName(context.Background(), "/", []types.Type{types.T_float32.ToType(), types.T_float32.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_float32, f32Pair.GetReturnType().Oid)
+
+	vecPair, err := GetFunctionByName(context.Background(), "/", []types.Type{types.T_array_float32.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_array_float32, vecPair.GetReturnType().Oid)
+
+	// Legacy float `/` era restores DOUBLE for int/int and year/year.
+	legacyCtx := WithLegacyIntegerFloatDiv(context.Background())
+	for _, pair := range [][]types.Type{
+		{types.T_int64.ToType(), types.T_int64.ToType()},
+		{types.T_year.ToType(), types.T_year.ToType()},
+	} {
+		legacyRes, err := GetFunctionByName(legacyCtx, "/", pair)
+		require.NoError(t, err)
+		require.Equal(t, types.T_float64, legacyRes.GetReturnType().Oid)
+	}
+}
+
+func TestExactDivisionExtremeValuesAndDivByZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	d128 := types.New(types.T_decimal128, 20, 0)
+	res128 := types.New(types.T_decimal128, 24, 4)
+
+	minInt64Dec, err := types.ParseDecimal128("-9223372036854775808", 20, 0)
+	require.NoError(t, err)
+	negOneDec, err := types.ParseDecimal128("-1", 20, 0)
+	require.NoError(t, err)
+	wantMinInt64DivNegOne, err := types.ParseDecimal128("9223372036854775808.0000", 24, 4)
+	require.NoError(t, err)
+
+	maxUint64Dec, err := types.ParseDecimal128("18446744073709551615", 20, 0)
+	require.NoError(t, err)
+	oneDec, err := types.ParseDecimal128("1", 20, 0)
+	require.NoError(t, err)
+	wantMaxUint64DivOne, err := types.ParseDecimal128("18446744073709551615.0000", 24, 4)
+	require.NoError(t, err)
+
+	zeroDec := types.Decimal128{}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(d128, []types.Decimal128{minInt64Dec, maxUint64Dec}, nil),
+			NewFunctionTestInput(d128, []types.Decimal128{negOneDec, oneDec}, nil),
+		},
+		NewFunctionTestResult(res128, false, []types.Decimal128{wantMinInt64DivNegOne, wantMaxUint64DivOne}, nil),
+		divFn,
+	)
+	defer tc.Free()
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+
+	// Division by zero in SELECT mode returns NULL + warning (no error); NULL / 0 returns NULL without warning.
+	selectProc := testutil.NewProcess(t)
+	selectProc.Base.DivByZeroErrorMode = 0
+	divZeroCase := NewFunctionTestCase(selectProc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(d128, []types.Decimal128{oneDec, oneDec}, []bool{false, true}),
+			NewFunctionTestInput(d128, []types.Decimal128{zeroDec, zeroDec}, nil),
+		},
+		NewFunctionTestResult(res128, false, []types.Decimal128{{}, {}}, []bool{true, true}),
+		divFn,
+	)
+	defer divZeroCase.Free()
+	succeed, info = divZeroCase.Run()
+	require.True(t, succeed, info)
+
+	// Verify NULL / 0 alone does not error and 1 / 0 in strict DML mode returns ErrDivByZero.
+	strictProc := testutil.NewProcess(t)
+	strictProc.Base.DivByZeroErrorMode = 1
+	strictCase := NewFunctionTestCase(strictProc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(d128, []types.Decimal128{oneDec}, nil),
+			NewFunctionTestInput(d128, []types.Decimal128{zeroDec}, nil),
+		},
+		NewFunctionTestResult(res128, true, []types.Decimal128{{}}, nil),
+		divFn,
+	)
+	defer strictCase.Free()
+	_, execErr := strictCase.DebugRun()
+	require.Error(t, execErr)
+	require.True(t, moerr.IsMoErrCode(execErr, moerr.ErrDivByZero), "got: %v", execErr)
+
+	nullDivZeroStrict := NewFunctionTestCase(strictProc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(d128, []types.Decimal128{oneDec}, []bool{true}),
+			NewFunctionTestInput(d128, []types.Decimal128{zeroDec}, nil),
+		},
+		NewFunctionTestResult(res128, false, []types.Decimal128{{}}, []bool{true}),
+		divFn,
+	)
+	defer nullDivZeroStrict.Free()
+	succeed, info = nullDivZeroStrict.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTemporalCastToDecimal256Execution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	d256Scale0 := types.New(types.T_decimal256, 38, 0)
+	d256Scale6 := types.New(types.T_decimal256, 38, 6)
+
+	dateVal := types.DateFromCalendar(2024, 1, 2)
+	wantDate, err := types.ParseDecimal256("20240102", 38, 0)
+	require.NoError(t, err)
+	dateCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateVal}, nil),
+			NewFunctionTestInput(d256Scale0, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(d256Scale0, false, []types.Decimal256{wantDate}, nil),
+		NewCast,
+	)
+	defer dateCase.Free()
+	succeed, info := dateCase.Run()
+	require.True(t, succeed, info)
+
+	yearVal := types.MoYear(2024)
+	wantYear, err := types.ParseDecimal256("2024", 38, 0)
+	require.NoError(t, err)
+	yearCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{yearVal}, nil),
+			NewFunctionTestInput(d256Scale0, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(d256Scale0, false, []types.Decimal256{wantYear}, nil),
+		NewCast,
+	)
+	defer yearCase.Free()
+	succeed, info = yearCase.Run()
+	require.True(t, succeed, info)
+
+	timeVal := types.TimeFromClock(false, 12, 34, 56, 789000)
+	wantTime, err := types.ParseDecimal256("123456.789000", 38, 6)
+	require.NoError(t, err)
+	timeCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_time, 0, 6), []types.Time{timeVal}, nil),
+			NewFunctionTestInput(d256Scale6, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(d256Scale6, false, []types.Decimal256{wantTime}, nil),
+		NewCast,
+	)
+	defer timeCase.Free()
+	succeed, info = timeCase.Run()
+	require.True(t, succeed, info)
+
+	dtVal := types.DatetimeFromClock(2024, 1, 2, 12, 34, 56, 789000)
+	wantDT, err := types.ParseDecimal256("20240102123456.789000", 38, 6)
+	require.NoError(t, err)
+	dtCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_datetime, 0, 6), []types.Datetime{dtVal}, nil),
+			NewFunctionTestInput(d256Scale6, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(d256Scale6, false, []types.Decimal256{wantDT}, nil),
+		NewCast,
+	)
+	defer dtCase.Free()
+	succeed, info = dtCase.Run()
+	require.True(t, succeed, info)
+
+	tsVal := dtVal.ToTimestamp(proc.GetSessionInfo().TimeZone)
+	tsCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_timestamp, 0, 6), []types.Timestamp{tsVal}, nil),
+			NewFunctionTestInput(d256Scale6, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(d256Scale6, false, []types.Decimal256{wantDT}, nil),
+		NewCast,
+	)
+	defer tsCase.Free()
+	succeed, info = tsCase.Run()
+	require.True(t, succeed, info)
+
+	// High-scale DECIMAL(65, 30) must succeed without overflowing Decimal128(38, 30).
+	d256Wide := types.New(types.T_decimal256, 65, 30)
+	wantDateWide, err := types.ParseDecimal256("20240102", 65, 30)
+	require.NoError(t, err)
+	wantYearWide, err := types.ParseDecimal256("2024", 65, 30)
+	require.NoError(t, err)
+	wantTimeWide, err := types.ParseDecimal256("123456.789000", 65, 30)
+	require.NoError(t, err)
+	wantDTWide, err := types.ParseDecimal256("20240102123456.789000", 65, 30)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		want  types.Decimal256
+	}{
+		{"date", NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateVal}, nil), wantDateWide},
+		{"year", NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{yearVal}, nil), wantYearWide},
+		{"time", NewFunctionTestInput(types.New(types.T_time, 0, 6), []types.Time{timeVal}, nil), wantTimeWide},
+		{"datetime", NewFunctionTestInput(types.New(types.T_datetime, 0, 6), []types.Datetime{dtVal}, nil), wantDTWide},
+		{"timestamp", NewFunctionTestInput(types.New(types.T_timestamp, 0, 6), []types.Timestamp{tsVal}, nil), wantDTWide},
+	} {
+		t.Run("DECIMAL(65,30)/"+tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(d256Wide, []types.Decimal256{}, nil)},
+				NewFunctionTestResult(d256Wide, false, []types.Decimal256{tc.want}, nil),
+				NewCast,
+			)
+			defer c.Free()
+			ok, msg := c.Run()
+			require.True(t, ok, msg)
+		})
+	}
+
+	// Width overflow must error on unmasked rows, and selectList must skip masked rows.
+	narrowD256 := types.New(types.T_decimal256, 5, 0)
+	overflowTime := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_time, 0, 0), []types.Time{types.TimeFromClock(false, 12, 34, 56, 0)}, nil),
+			NewFunctionTestInput(narrowD256, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(narrowD256, true, []types.Decimal256{{}}, nil),
+		NewCast,
+	)
+	defer overflowTime.Free()
+	_, timeErr := overflowTime.DebugRun()
+	require.Error(t, timeErr)
+
+	overflowDT := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_datetime, 0, 0), []types.Datetime{dtVal}, nil),
+			NewFunctionTestInput(narrowD256, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(narrowD256, true, []types.Decimal256{{}}, nil),
+		NewCast,
+	)
+	defer overflowDT.Free()
+	_, dtErr := overflowDT.DebugRun()
+	require.Error(t, dtErr)
+
+	maskedDT := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_datetime, 0, 0), []types.Datetime{dtVal, dtVal}, []bool{true, false}),
+			NewFunctionTestInput(narrowD256, []types.Decimal256{}, nil),
+		},
+		NewFunctionTestResult(narrowD256, false, []types.Decimal256{{}, {}}, []bool{true, true}),
+		NewCast,
+	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+	defer maskedDT.Free()
+	succeed, info = maskedDT.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTemporalExplicitCastToDecimal256ClampsWithWarning(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	target39_30 := types.New(types.T_decimal256, 39, 30)
+	clamped39_30, err := clampDecimal256Value(false, 39, 30)
+	require.NoError(t, err)
+
+	dtVal := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 0)
+	dateVal := types.DateFromCalendar(2024, 1, 2)
+	tsVal := dtVal.ToTimestamp(time.UTC)
+	timeVal := types.TimeFromClock(false, 12, 34, 56, 0)
+	yearVal := types.MoYear(2024)
+
+	// DATETIME(20240102030405 = 14 integer digits) and TIMESTAMP exceed DECIMAL(39,30) (9 integer digits).
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"datetime", NewFunctionTestInput(types.New(types.T_datetime, 0, 0), []types.Datetime{dtVal}, nil)},
+		{"timestamp", NewFunctionTestInput(types.New(types.T_timestamp, 0, 0), []types.Timestamp{tsVal}, nil)},
+	} {
+		t.Run("explicit/"+tc.name, func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc.Session = session
+			c := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(target39_30, []types.Decimal256{}, nil)},
+				NewFunctionTestResult(target39_30, false, []types.Decimal256{clamped39_30}, nil),
+				NewExplicitCast,
+			)
+			defer c.Free()
+			ok, msg := c.Run()
+			require.True(t, ok, msg)
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, session.warnings[0].code)
+		})
+		t.Run("implicit/"+tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(target39_30, []types.Decimal256{}, nil)},
+				NewFunctionTestResult(target39_30, true, []types.Decimal256{{}}, nil),
+				NewCast,
+			)
+			defer c.Free()
+			_, castErr := c.DebugRun()
+			require.Error(t, castErr)
+		})
+	}
+
+	// DATE(8 digits), TIME(6 digits), YEAR(4 digits) overflow DECIMAL(39,36) (3 integer digits).
+	target39_36 := types.New(types.T_decimal256, 39, 36)
+	clamped39_36, err := clampDecimal256Value(false, 39, 36)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"date", NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateVal}, nil)},
+		{"time", NewFunctionTestInput(types.New(types.T_time, 0, 0), []types.Time{timeVal}, nil)},
+		{"year", NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{yearVal}, nil)},
+	} {
+		t.Run("explicit/"+tc.name, func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc.Session = session
+			c := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(target39_36, []types.Decimal256{}, nil)},
+				NewFunctionTestResult(target39_36, false, []types.Decimal256{clamped39_36}, nil),
+				NewExplicitCast,
+			)
+			defer c.Free()
+			ok, msg := c.Run()
+			require.True(t, ok, msg)
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, session.warnings[0].code)
+		})
+	}
+}
+
+func min32(a, b int32) int32 {
+	if a < b {
+		return a
+	}
+	return b
 }

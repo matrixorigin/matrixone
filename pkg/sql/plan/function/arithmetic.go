@@ -224,11 +224,14 @@ func divOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 	case types.T_array_float32, types.T_array_float64:
-	case types.T_year:
 	default:
 		return false
 	}
 	return true
+}
+
+func legacyDivOperatorSupports(typ1, typ2 types.Type) bool {
+	return divOperatorSupports(typ1, typ2) || (typ1.Oid == types.T_year && typ2.Oid == types.T_year)
 }
 
 func integerDivOperatorSupports(typ1, typ2 types.Type) bool {

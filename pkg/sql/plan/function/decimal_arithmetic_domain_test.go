@@ -33,8 +33,8 @@ func TestArithmeticDecimalCastsRetainIntegerDomain(t *testing.T) {
 								idx = 1
 							}
 							resolved, err := GetFunctionByName(t.Context(), op, inputs)
-							if integer.Oid == types.T_bit && (op == "/" || op == "div") {
-								// These pairs were not supported before the cast fix.
+							if integer.Oid == types.T_bit && op == "div" {
+								// BIT div temporal was not supported before the cast fix.
 								// Retain that boundary rather than enabling a feature.
 								require.Error(t, err)
 								return

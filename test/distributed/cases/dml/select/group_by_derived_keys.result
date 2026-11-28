@@ -81,12 +81,12 @@ deallocate prepare derived_group_param;
 select b,b+1,count(*) from t group by b,b+1 having count(*)>100;
 Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
 select x,1/x,count(*) from t group by x,1/x order by x;
-➤ x[4,32,0]  ¦  1 / x[8,53,31]  ¦  count(*)[-5,64,0]  𝄀
+➤ x[4,32,0]  ¦  1 / x[3,23,4]  ¦  count(*)[-5,64,0]  𝄀
 null  ¦  null  ¦  2  𝄀
--2147483648  ¦  -4.6566128730773926E-10  ¦  1  𝄀
+-2147483648  ¦  0.0000  ¦  1  𝄀
 0  ¦  null  ¦  2  𝄀
-3  ¦  0.3333333333333333  ¦  2  𝄀
-2147483647  ¦  4.656612875245797E-10  ¦  1
+3  ¦  0.3333  ¦  2  𝄀
+2147483647  ¦  0.0000  ¦  1
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1365  ¦  Division by 0  𝄀

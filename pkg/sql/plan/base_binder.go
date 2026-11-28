@@ -5747,6 +5747,30 @@ func (b *baseBinder) markVolatileInLeft(left *plan.Expr) error {
 	return nil
 }
 
+func (b *baseBinder) inferPreparedUnknownNumericArgs(args []*Expr, original []types.Type, forExactDiv bool) ([]*Expr, error) {
+	for i := range args {
+		if original[i].Oid != types.T_any {
+			continue
+		}
+		var hint types.Type
+		var ok bool
+		if forExactDiv {
+			hint, ok = function.InferExactDivisionParameterType(original[1-i])
+		} else {
+			hint, ok = function.InferNumericParameterType([]types.Type{original[1-i]}, nil)
+		}
+		if !ok {
+			return args, nil
+		}
+		cast, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&hint))
+		if err != nil {
+			return nil, err
+		}
+		args[i] = cast
+	}
+	return args, nil
+}
+
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
 	if len(args) != 2 {
 		return args, nil
@@ -5759,21 +5783,15 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 		if (original[0].Oid.IsDecimal() || original[1].Oid.IsDecimal()) &&
 			(original[0].Oid.IsDecimal() || original[0].Oid.IsInteger() || original[0].Oid == types.T_any) &&
 			(original[1].Oid.IsDecimal() || original[1].Oid.IsInteger() || original[1].Oid == types.T_any) {
-			for i := range args {
-				if original[i].Oid != types.T_any {
-					continue
-				}
-				hint, ok := function.InferNumericParameterType([]types.Type{original[1-i]}, nil)
-				if !ok {
-					return args, nil
-				}
-				cast, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&hint))
-				if err != nil {
-					return nil, err
-				}
-				args[i] = cast
-			}
-			return args, nil
+			return b.inferPreparedUnknownNumericArgs(args, original, false)
+		}
+	}
+	if name == "/" && !function.LegacyIntegerFloatDiv(b.GetContext()) {
+		original := []types.Type{makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1])}
+		leftValid := function.IsExactDivisionOperand(original[0].Oid) || original[0].Oid == types.T_any
+		rightValid := function.IsExactDivisionOperand(original[1].Oid) || original[1].Oid == types.T_any
+		if leftValid && rightValid && !(original[0].Oid == types.T_any && original[1].Oid == types.T_any) {
+			return b.inferPreparedUnknownNumericArgs(args, original, true)
 		}
 	}
 

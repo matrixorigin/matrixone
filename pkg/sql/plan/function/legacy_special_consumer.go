@@ -290,3 +290,40 @@ func legacyIncompleteTemporalCheck(ctx context.Context, id int32, overloads []ov
 	}
 	return fixedTypeMatch(overloads[:count], inputs), true
 }
+
+type legacyIntegerFloatDivContextKey struct{}
+
+// WithLegacyIntegerFloatDiv reconstructs pre-exact-decimal `/` trees
+// (where integer and YEAR division bound to DOUBLE) only while verifying
+// persisted table expressions during DUMP/LOAD.
+func WithLegacyIntegerFloatDiv(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyIntegerFloatDivContextKey{}, true)
+}
+
+// LegacyIntegerFloatDiv reports whether persisted expression verification is
+// replaying the historical float `/` binding era.
+func LegacyIntegerFloatDiv(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(legacyIntegerFloatDivContextKey{}).(bool)
+	return value
+}
+
+func legacyFloatDivCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 2 {
+		has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
+		if has {
+			if divOperatorSupportsVectorScalar(t1, t2) {
+				return newCheckResultWithCast(1, []types.Type{t1, t2})
+			} else if legacyDivOperatorSupports(t1, t2) {
+				return newCheckResultWithCast(0, []types.Type{t1, t2})
+			}
+		} else {
+			if legacyDivOperatorSupports(inputs[0], inputs[1]) {
+				return newCheckResultWithSuccess(0)
+			}
+		}
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
