@@ -64,7 +64,7 @@ func NewFlushObjTask(
 		delete(data.Nameidx, data.Attrs[2])
 		data.Attrs = append(data.Attrs[:2], data.Attrs[3:]...)
 
-		data.Vecs[2].Close()
+		containers.ReleaseVector(data.Vecs[2])
 		data.Vecs = append(data.Vecs[:2], data.Vecs[3:]...)
 	}
 

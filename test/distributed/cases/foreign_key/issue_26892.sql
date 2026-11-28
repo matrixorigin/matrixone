@@ -18,6 +18,35 @@ insert into child values (2, 102);
 select id, parent_id from child order by id;
 truncate table child;
 
+-- A prepared parent DELETE must honor the execution-time setting (#33190).
+insert into parent values (2), (3);
+insert into child values (3, 2), (4, 3), (5, 1);
+prepare fk_delete_child from 'delete from child where id = 5';
+
+set foreign_key_checks = 0;
+prepare fk_delete_off from 'delete from parent where id = 2';
+set foreign_key_checks = 1;
+execute fk_delete_off;
+select id from parent order by id;
+select id, parent_id from child order by id;
+deallocate prepare fk_delete_off;
+
+-- Use a different parent so the reverse case also fails independently on old code.
+prepare fk_delete_on from 'delete from parent where id = 3';
+set foreign_key_checks = 0;
+execute fk_delete_on;
+select id from parent order by id;
+select id, parent_id from child order by id;
+deallocate prepare fk_delete_on;
+
+-- A child-only DELETE remains usable after the same toggles.
+set foreign_key_checks = 1;
+execute fk_delete_child;
+select id, parent_id from child order by id;
+deallocate prepare fk_delete_child;
+truncate table child;
+delete from parent where id in (2, 3);
+
 -- Plain INSERT prepared while checks are disabled: OFF -> ON -> OFF.
 set foreign_key_checks = 0;
 prepare fk_plain_off from 'insert into child values (?, ?)';

@@ -507,6 +507,8 @@ enum HAKeeperUpdateType {
   // protocol floor.
   ActivatePersistedExpressionProtocolUpdate = 22;
   CatalogMetadataBarrierUpdate = 23;
+  // Applies membership delivery checks using the committed LogStore policy.
+  GuardedLogHeartbeatUpdate = 24;
 }
 
 // HAKeeperState state transition diagram
@@ -942,6 +944,9 @@ message CheckerState {
   uint64 IDWatermarkRestoreGeneration = 16;
   bool LogServiceRecoveryPrepared = 17;
   bool LogServiceRecoveryCompleted = 18;
+  // The elected HAKeeper publishes one expiry horizon in its tick entry.
+  uint64 LogStoreTimeoutPolicyTerm = 19;
+  uint64 LogStoreTimeoutPolicyTicks = 20;
 }
 
 message DeletedStore {
@@ -1040,6 +1045,9 @@ message HAKeeperRSMState {
   // Independent of phase: even a rejected new-protocol entry requires a
   // compatible decoder on replay. A nonzero floor requires MOH3 feature bit 2.
   uint64 CatalogMetadataBarrierRequiredProtocolVersion = 46;
+  // A nonzero term identifies the committed LogStore expiry policy.
+  uint64 LogStoreTimeoutPolicyTerm = 47;
+  uint64 LogStoreTimeoutPolicyTicks = 48;
 }
 
 // CatalogMetadataBarrierPhase is the durable catalog metadata lifecycle phase.

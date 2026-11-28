@@ -19,6 +19,8 @@
 #include "cuvs_types.h"
 
 #ifdef __cplusplus
+#include <cuda/stream_ref>
+#include <raft/core/resource/cuda_stream.hpp>
 #include <raft/core/resources.hpp>
 #include <raft/core/host_mdspan.hpp>
 #include <cuvs/distance/distance.hpp>
@@ -31,6 +33,12 @@
 #include <cuda_fp16.h>
 
 namespace matrixone {
+
+// RAFT 26.08 and 26.10 expose different views of the same CUDA stream.
+inline cudaStream_t cuda_stream_handle(const raft::resources& res) {
+    const cuda::stream_ref stream = raft::resource::get_cuda_stream(res);
+    return stream.get();
+}
 
 /**
  * @brief Helper to check if a raft handle has SNMG resources initialized.

@@ -1552,16 +1552,16 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 		objectMap map[objectio.Segmentid]*objectInfo) {
 		for _, entry := range objectMap {
 			vector.AppendBytes(
-				bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+				bat.GetVectorByName(catalog.ObjectAttr_ObjectStats),
 				entry.stats[:], false, common.DebugAllocator)
 			vector.AppendFixed[types.TS](
-				bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector(),
+				bat.GetVectorByName(catalog.EntryNode_CreateAt),
 				entry.createAt, false, common.DebugAllocator)
 			vector.AppendFixed[types.TS](
-				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+				bat.GetVectorByName(catalog.EntryNode_DeleteAt),
 				entry.deleteAt, false, common.DebugAllocator)
 			vector.AppendFixed[uint64](
-				bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+				bat.GetVectorByName(SnapshotAttr_TID),
 				tid, false, common.DebugAllocator)
 		}
 	}
@@ -1623,21 +1623,21 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	}
 	appendBat := func(bat *containers.Batch, table *tableInfo) {
 		vector.AppendFixed[uint32](
-			bat.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector(),
+			bat.GetVectorByName(catalog2.SystemColAttr_AccID),
 			table.accountID, false, common.DebugAllocator)
 		vector.AppendFixed[uint64](
-			bat.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector(),
+			bat.GetVectorByName(catalog2.SystemRelAttr_DBID),
 			table.dbID, false, common.DebugAllocator)
 		vector.AppendFixed[uint64](
-			bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+			bat.GetVectorByName(SnapshotAttr_TID),
 			table.tid, false, common.DebugAllocator)
 		vector.AppendFixed[types.TS](
-			bat.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector(),
+			bat.GetVectorByName(catalog2.SystemRelAttr_CreateAt),
 			table.createAt, false, common.DebugAllocator)
 		vector.AppendFixed[types.TS](
-			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+			bat.GetVectorByName(catalog.EntryNode_DeleteAt),
 			table.deleteAt, false, common.DebugAllocator)
-		vector.AppendBytes(bat.GetVectorByName(MoTablesPK).GetDownstreamVector(),
+		vector.AppendBytes(bat.GetVectorByName(MoTablesPK),
 			[]byte(table.pk), false, common.DebugAllocator)
 	}
 	for _, entry := range sm.tables {
@@ -1670,7 +1670,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 
 	for ts := range sm.aobjDelTsMap {
 		vector.AppendFixed[types.TS](
-			aObjDelTsBat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+			aObjDelTsBat.GetVectorByName(catalog.EntryNode_DeleteAt),
 			ts, false, common.DebugAllocator)
 	}
 	defer aObjDelTsBat.Close()
@@ -1712,7 +1712,7 @@ func (sm *SnapshotMeta) rebuildSpecialTable(ins *containers.Batch, tableInfo *sp
 	sm.Lock()
 	defer sm.Unlock()
 	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
-		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+		ins.GetVectorByName(catalog.SnapshotAttr_TID))
 	if ins.Length() < 1 {
 		logutil.Warnf("Rebuild%s unexpected length %d", tableName, ins.Length())
 		return
@@ -1728,22 +1728,22 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 	sm.Lock()
 	defer sm.Unlock()
 	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
-		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+		ins.GetVectorByName(catalog.SnapshotAttr_TID))
 	insAccIDs := vector.MustFixedColWithTypeCheck[uint32](
-		ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
+		ins.GetVectorByName(catalog2.SystemColAttr_AccID))
 	insDBIDs := vector.MustFixedColWithTypeCheck[uint64](
-		ins.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
+		ins.GetVectorByName(catalog2.SystemRelAttr_DBID))
 	insCreateTSs := vector.MustFixedColWithTypeCheck[types.TS](
-		ins.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector())
+		ins.GetVectorByName(catalog2.SystemRelAttr_CreateAt))
 	insDeleteTSs := vector.MustFixedColWithTypeCheck[types.TS](
-		ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+		ins.GetVectorByName(catalog.EntryNode_DeleteAt))
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
 		dbid := insDBIDs[i]
 		accid := insAccIDs[i]
 		createTS := insCreateTSs[i]
 		deleteTS := insDeleteTSs[i]
-		pk := string(ins.GetVectorByName(MoTablesPK).GetDownstreamVector().GetRawBytesAt(i))
+		pk := string(ins.GetVectorByName(MoTablesPK).GetRawBytesAt(i))
 		if sm.tables[accid] == nil {
 			sm.tables[accid] = make(map[uint64]*tableInfo)
 		}
@@ -1775,9 +1775,9 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	sm.Lock()
 	defer sm.Unlock()
 	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
-		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+		ins.GetVectorByName(catalog.SnapshotAttr_TID))
 	accIDs := vector.MustFixedColWithTypeCheck[uint32](
-		ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
+		ins.GetVectorByName(catalog2.SystemColAttr_AccID))
 	if ins.Length() < 1 {
 		logutil.Warnf("RebuildTid unexpected length %d", ins.Length())
 		return
@@ -1809,7 +1809,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 		return
 	}
 	sm.aobjDelTsMap = make(map[types.TS]struct{})
-	commitTsVec := vector.MustFixedColWithTypeCheck[types.TS](ins.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector())
+	commitTsVec := vector.MustFixedColWithTypeCheck[types.TS](ins.GetVectorByName(EntryNode_DeleteAt))
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
@@ -1827,11 +1827,11 @@ func (sm *SnapshotMeta) Rebuild(
 ) {
 	sm.Lock()
 	defer sm.Unlock()
-	insCreateTSs := vector.MustFixedColWithTypeCheck[types.TS](ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
-	insTides := vector.MustFixedColWithTypeCheck[uint64](ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	insCreateTSs := vector.MustFixedColWithTypeCheck[types.TS](ins.GetVectorByName(catalog.EntryNode_CreateAt))
+	insTides := vector.MustFixedColWithTypeCheck[uint64](ins.GetVectorByName(SnapshotAttr_TID))
 	for i := 0; i < ins.Length(); i++ {
 		var objectStats objectio.ObjectStats
-		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetValue(i).([]byte)
 		objectStats.UnMarshal(buf)
 		createTS := insCreateTSs[i]
 		tid := insTides[i]
@@ -1922,7 +1922,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+			vec = pkgVec
 		}
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
@@ -1949,7 +1949,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+			vec = pkgVec
 		}
 		deltaBat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
@@ -1991,7 +1991,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 				if pkgVec.Length() == 0 {
 					vec = containers.MakeVector(aObjectDelSchemaTypes[i], common.DebugAllocator)
 				} else {
-					vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+					vec = pkgVec
 				}
 				bat.AddVector(aObjectDelSchemaAttr[i], vec)
 			}
@@ -2004,7 +2004,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 			if pkgVec.Length() == 0 {
 				vec = containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator)
 			} else {
-				vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+				vec = pkgVec
 			}
 			bat.AddVector(tableInfoSchemaAttr[i], vec)
 		}

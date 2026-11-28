@@ -265,6 +265,7 @@ type Session struct {
 	ruleVariants                 *roleRuleVariants
 	ruleCacheIdentity            rewriteRuleIdentity
 	ruleCacheLowerCaseTableNames int64
+	ruleCacheSQLMode             string
 	ruleCacheDatabase            string
 	ruleCacheVersion             any
 	ruleCacheVersionProvider     func(context.Context, *Session) (any, error)
@@ -2497,6 +2498,19 @@ func (ses *Session) invalidateCachedPlans(prepared bool) {
 	if prepared {
 		for _, statement := range ses.prepareStmts {
 			statement.needsRebuild = true
+		}
+	}
+}
+
+func (ses *Session) invalidateForeignKeyDeletePlans() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidateForeignKeyDeletePlans()
+	}
+	for _, stmt := range ses.prepareStmts {
+		if deletePlanDependsOnForeignKeyChecks(stmt.PreparePlan.GetDcl().GetPrepare().GetPlan()) {
+			stmt.needsRebuild = true
 		}
 	}
 }

@@ -15,8 +15,9 @@
 package logtail
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"

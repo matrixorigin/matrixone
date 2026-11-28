@@ -102,6 +102,82 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 	}
 }
 
+// A group larger than one gather has both a shared probe string and mixed
+// build widths. The second probe must resume partway through its duplicates.
+func TestInnerGatherResumesWideGroup(t *testing.T) {
+	previous := mpool.CapLimit
+	mpool.CapLimit = 1 << 20
+	t.Cleanup(func() { mpool.CapLimit = previous })
+	key, str := types.T_int64.ToType(), types.T_varchar.ToType()
+	arg := newTestCase(t, []types.Type{key, key}, nil, [][]*plan.Expr{{newExpr(0, key)}, {newExpr(0, key)}})
+	arg.arg.JoinType, arg.arg.NonEqCond = plan.Node_INNER, nil
+	arg.arg.LeftTypes, arg.arg.RightTypes = []types.Type{key, str}, []types.Type{key, key, str}
+	arg.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 1}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}}
+	mp := arg.proc.Mp()
+	probe, build := batch.NewWithTypes(arg.arg.LeftTypes, mp), batch.NewWithTypes(arg.arg.RightTypes, mp)
+	t.Cleanup(func() {
+		arg.arg.Reset(arg.proc, false, nil)
+		arg.barg.Reset(arg.proc, false, nil)
+		arg.arg.Free(arg.proc, false, nil)
+		arg.barg.Free(arg.proc, false, nil)
+		freeTestChildren(arg.arg)
+		freeTestChildren(arg.barg)
+		probe.Clean(mp)
+		build.Clean(mp)
+		arg.proc.GetMessageBoard().Reset()
+		arg.cancel()
+		arg.proc.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+	probeValues := []string{strings.Repeat("a", 100), strings.Repeat("b", 100)}
+	for _, value := range probeValues {
+		require.NoError(t, vector.AppendFixed(probe.Vecs[0], int64(1), false, mp))
+		require.NoError(t, vector.AppendBytes(probe.Vecs[1], []byte(value), false, mp))
+	}
+	probe.SetRowCount(len(probeValues))
+	const matches = 300
+	wide := strings.Repeat("z", int(outputAreaTarget()/hashmap.UnitLimit))
+	for id := range matches {
+		value := "short"
+		if id < 200 {
+			value = wide
+		}
+		require.NoError(t, vector.AppendFixed(build.Vecs[0], int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(build.Vecs[1], int64(id), false, mp))
+		require.NoError(t, vector.AppendBytes(build.Vecs[2], []byte(value), false, mp))
+	}
+	build.SetRowCount(matches)
+	resetHashBuildChildrenWithBatch(arg.barg, build)
+	resetChildrenWithBatch(arg.arg, probe)
+	require.NoError(t, arg.barg.Prepare(arg.proc))
+	require.NoError(t, arg.arg.Prepare(arg.proc))
+	_, err := vm.Exec(arg.barg, arg.proc)
+	require.NoError(t, err)
+	next := 0
+	for _, rows := range []int{356, 244} {
+		out, err := vm.Exec(arg.arg, arg.proc)
+		require.NoError(t, err)
+		require.Equal(t, rows, out.Batch.RowCount())
+		first := next / matches
+		for i := range rows {
+			id := next % matches
+			require.Equal(t, int64(id), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[1], i))
+			require.Equal(t, probeValues[next/matches], string(out.Batch.Vecs[0].GetBytesAt(i)))
+			want := "short"
+			if id < 200 {
+				want = wide
+			}
+			require.Equal(t, want, string(out.Batch.Vecs[2].GetBytesAt(i)))
+			next++
+		}
+		require.Len(t, out.Batch.Vecs[0].GetArea(), ((next-1)/matches-first+1)*len(probeValues[0]))
+		require.LessOrEqual(t, int64(len(out.Batch.Vecs[2].GetArea())), outputAreaTarget())
+	}
+	end, err := vm.Exec(arg.arg, arg.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, end.Status)
+}
+
 func BenchmarkHashJoinSmallDuplicatePayload(b *testing.B) {
 	for _, duplicates := range []int{2, 4, 7} {
 		b.Run(fmt.Sprintf("matches=%d", duplicates), func(b *testing.B) {

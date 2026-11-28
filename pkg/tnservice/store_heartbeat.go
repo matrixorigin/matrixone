@@ -111,7 +111,7 @@ func (s *store) commandTask(ctx context.Context) {
 		if ctx2.Err() != nil {
 			return
 		}
-		s.handlePolledCommandBatch(ctx, batch)
+		s.handleCommandBatch(batch)
 	}
 
 	active := func() bool {
@@ -205,9 +205,6 @@ func (s *store) heartbeat(ctx context.Context) {
 
 	s.config.DecrCount()
 	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
-	if s.shutdownBatchID.Load() != 0 {
-		s.acknowledgeShutdown(ctx)
-	}
 }
 
 func (s *store) getHeartbeatMessage() logservicepb.TNStoreHeartbeat {
@@ -231,12 +228,6 @@ func (s *store) getHeartbeatMessage() logservicepb.TNStoreHeartbeat {
 		hb.QueryAddress = s.queryServiceServiceAddr()
 	}
 	return hb
-}
-
-func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
-	s.commandMu.Lock()
-	defer s.commandMu.Unlock()
-	s.handleCommandsLocked(cmds)
 }
 
 func (s *store) handleCommandBatch(batch logservicepb.CommandBatch) {
@@ -278,16 +269,7 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 			zap.Uint64("batch-id", batch.BatchID))
 		return
 	}
-	shutdown := batch.BatchID != 0 && hasShutdownCommand(batch.Commands)
-	if shutdown {
-		// Shutdown is the one command whose side effect prevents a later
-		// heartbeat from carrying its acknowledgement. Apply the rest of the
-		// batch now, but defer process termination until HAKeeper has committed
-		// the exact batch acknowledgement.
-		s.handleNonShutdownCommandsLocked(commands)
-	} else {
-		s.handleCommandsLocked(commands)
-	}
+	s.handleCommandsLocked(commands)
 	s.appliedCommandIDs = applied
 	if batch.BatchID != 0 {
 		s.lastCommandBatchID = batch.BatchID
@@ -295,47 +277,10 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
 		s.legacyDedupeArmed = true
 	}
-	if shutdown {
-		s.shutdownBatchID.Store(batch.BatchID)
-	}
 }
 
-func hasShutdownCommand(cmds []logservicepb.ScheduleCommand) bool {
-	for i := range cmds {
-		if cmds[i].GetShutdownStore() != nil {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *store) handleNonShutdownCommandsLocked(cmds []logservicepb.ScheduleCommand) {
-	for i := range cmds {
-		if cmds[i].GetShutdownStore() != nil {
-			if cmds[i].ServiceType != logservicepb.TNService {
-				s.rt.Logger().Fatal("received invalid command", zap.String("command", cmds[i].LogString()))
-			}
-			s.rt.Logger().Debug(
-				"deferring shutdown schedule command until acknowledgement",
-				zap.String("command", cmds[i].LogString()),
-			)
-			continue
-		}
-		s.handleCommandsLocked(cmds[i : i+1])
-	}
-}
-
-func (s *store) handlePolledCommandBatch(ctx context.Context, batch logservicepb.CommandBatch) {
-	s.handleCommandBatch(batch)
-	if s.shutdownBatchID.Load() != 0 {
-		s.acknowledgeShutdown(ctx)
-	}
-}
-
-// handleHeartbeatResponse records commands before using the response as proof
-// that an acknowledgement was committed. A stale acknowledgement cannot
-// complete a newer shutdown generation, and a response that still contains a
-// shutdown command explicitly proves that HAKeeper retained it.
+// handleHeartbeatResponse clears identities only after an acknowledgement of
+// the current batch, then applies the newly received commands.
 func (s *store) handleHeartbeatResponse(
 	sentAck uint64,
 	batch logservicepb.CommandBatch,
@@ -347,55 +292,6 @@ func (s *store) handleHeartbeatResponse(
 		s.appliedCommandIDs = nil
 	}
 	s.handleCommandBatchLocked(batch)
-	for {
-		pending := s.shutdownBatchID.Load()
-		if pending == 0 || sentAck < pending || hasShutdownCommand(batch.Commands) {
-			return
-		}
-		if s.shutdownBatchID.CompareAndSwap(pending, 0) {
-			s.handleShutdownStore(logservicepb.ScheduleCommand{})
-			return
-		}
-	}
-}
-
-// acknowledgeShutdown uses the existing heartbeat protocol to close the
-// terminal command's delivery loop before terminating the process. It is only
-// called for ShutdownStore, so ordinary heartbeat and command paths pay no
-// extra RPC cost. Poll and heartbeat delivery can race; serialize this rare
-// path so only one acknowledgement attempt is active.
-func (s *store) acknowledgeShutdown(ctx context.Context) {
-	s.shutdownAckMu.Lock()
-	defer s.shutdownAckMu.Unlock()
-
-	ctx2, cancel := context.WithTimeoutCause(
-		ctx,
-		s.cfg.HAKeeper.HeatbeatTimeout.Duration,
-		moerr.CauseTnServiceHeartbeat,
-	)
-	defer cancel()
-	for s.shutdownBatchID.Load() != 0 {
-		hb := s.getHeartbeatMessage()
-		batch, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
-		if err != nil {
-			s.commandPollNeeded.Store(true)
-			if ctx.Err() == nil {
-				err = moerr.AttachCause(ctx2, err)
-				v2.TNHeartbeatFailureCounter.Inc()
-				s.rt.Logger().Error(
-					"failed to acknowledge tn shutdown command",
-					zap.Uint64("batch-id", hb.AckedCommandBatchID),
-					zap.Error(err),
-				)
-			}
-			return
-		}
-		if ctx2.Err() != nil {
-			s.commandPollNeeded.Store(true)
-			return
-		}
-		s.handleHeartbeatResponse(hb.AckedCommandBatchID, batch)
-	}
 }
 
 func (s *store) handleRetryableCommandsLocked(cmds []logservicepb.ScheduleCommand) {
@@ -420,7 +316,9 @@ func (s *store) handleCommandsLocked(cmds []logservicepb.ScheduleCommand) {
 				s.handleRemoveReplica(cmd)
 			}
 		} else if cmd.GetShutdownStore() != nil {
-			s.handleShutdownStore(cmd)
+			// Older HAKeeper versions could persist cluster-wide shutdowns.
+			// Treat them as applied so normal batch acknowledgements drain them.
+			continue
 		} else if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
@@ -451,13 +349,5 @@ func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
 	defer s.mu.Unlock()
 	if err := s.removeReplicaLocked(shardID); err != nil {
 		s.rt.Logger().Error("failed to remove replica", zap.Error(err))
-	}
-}
-
-func (s *store) handleShutdownStore(_ logservicepb.ScheduleCommand) {
-	// notify main routine that have received shutdown cmd
-	select {
-	case s.shutdownC <- struct{}{}:
-	default:
 	}
 }

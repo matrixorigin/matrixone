@@ -18,50 +18,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/require"
 )
-
-func TestShutdownStores(t *testing.T) {
-	stores := map[string]struct{}{
-		"11": {},
-		"12": {},
-		"13": {},
-	}
-
-	// operator for log service
-	{
-		serviceType := pb.LogService
-		ops := shutdownStores(serviceType, stores)
-		require.Equal(t, len(stores), len(ops))
-
-		for i := 0; i < len(ops); i++ {
-			op := ops[i]
-			steps := op.OpSteps()
-			require.Equal(t, 1, len(steps))
-
-			_, ok := steps[0].(operator.StopLogStore)
-			require.True(t, ok)
-		}
-	}
-
-	// operator for tn service
-	{
-		serviceType := pb.TNService
-		ops := shutdownStores(serviceType, stores)
-		require.Equal(t, len(stores), len(ops))
-
-		for i := 0; i < len(ops); i++ {
-			op := ops[i]
-			steps := op.OpSteps()
-			require.Equal(t, 1, len(steps))
-
-			_, ok := steps[0].(operator.StopTnStore)
-			require.True(t, ok)
-		}
-	}
-}
 
 func TestParseLogStores(t *testing.T) {
 	expiredTick := uint64(10)
@@ -91,52 +50,9 @@ func TestParseLogStores(t *testing.T) {
 	}
 
 	logStores := parseLogState(cfg, logState, currTick)
-	require.Equal(t, len(logState.Stores), logStores.length())
-	require.Equal(t, pb.LogService, logStores.serviceType)
+	require.Equal(t, len(logState.Stores), len(logStores.working)+len(logStores.expired))
 	require.Equal(t, 1, len(logStores.expired))
-	require.Equal(t, 1, len(logStores.shutdownExpiredStores()))
 	require.Equal(t, 2, len(logStores.working))
-	require.Equal(t, 2, len(logStores.shutdownWorkingStores()))
-}
-
-func TestParseTnStores(t *testing.T) {
-	expiredTick := uint64(10)
-	// construct current tick in order to make heartbeat tick expired
-	cfg := hakeeper.Config{}
-	cfg.Fill()
-	currTick := cfg.ExpiredTick(expiredTick, cfg.TNStoreTimeout) + 1
-
-	tnState := pb.TNState{
-		Stores: map[string]pb.TNStoreInfo{
-			"expired1": {
-				Tick: expiredTick,
-				Shards: []pb.TNShardInfo{
-					mockTnShardInfo(10, 100),
-				},
-			},
-			"working1": {
-				Tick: currTick,
-				Shards: []pb.TNShardInfo{
-					mockTnShardInfo(11, 101),
-				},
-			},
-			"working2": {
-				Tick: currTick,
-				Shards: []pb.TNShardInfo{
-					mockTnShardInfo(12, 102),
-					mockTnShardInfo(13, 103),
-				},
-			},
-		},
-	}
-
-	tnStores := parseTnState(cfg, tnState, currTick)
-	require.Equal(t, len(tnState.Stores), tnStores.length())
-	require.Equal(t, pb.TNService, tnStores.serviceType)
-	require.Equal(t, 1, len(tnStores.expired))
-	require.Equal(t, 1, len(tnStores.shutdownExpiredStores()))
-	require.Equal(t, 2, len(tnStores.working))
-	require.Equal(t, 2, len(tnStores.shutdownWorkingStores()))
 }
 
 func TestLogShard(t *testing.T) {
@@ -241,7 +157,7 @@ func TestLogShardMap(t *testing.T) {
 	require.Equal(t, 0, len(shards[13].workingReplicas))
 }
 
-func TestCheck(t *testing.T) {
+func TestHealthy(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}
@@ -270,33 +186,8 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		tnState := pb.TNState{
-			Stores: map[string]pb.TNStoreInfo{
-				"expired11": {
-					Tick: expiredTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(10, 100),
-					},
-				},
-				"working11": {
-					Tick: currTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(11, 101),
-					},
-				},
-				"working12": {
-					Tick: currTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(12, 102),
-						mockTnShardInfo(13, 103),
-					},
-				},
-			},
-		}
-
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
+		healthy := Healthy(cfg, pb.ClusterInfo{}, logState, currTick)
 		require.True(t, healthy)
-		require.Equal(t, 0, len(ops))
 	}
 
 	// system unhealthy
@@ -321,33 +212,8 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		tnState := pb.TNState{
-			Stores: map[string]pb.TNStoreInfo{
-				"expired11": {
-					Tick: expiredTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(10, 100),
-					},
-				},
-				"working11": {
-					Tick: currTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(11, 101),
-					},
-				},
-				"working12": {
-					Tick: currTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(12, 102),
-						mockTnShardInfo(13, 103),
-					},
-				},
-			},
-		}
-
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
+		healthy := Healthy(cfg, pb.ClusterInfo{}, logState, currTick)
 		require.False(t, healthy)
-		require.Equal(t, 6, len(ops))
 	}
 }
 
@@ -363,12 +229,5 @@ func mockLogStoreInfo(tick uint64, replicas ...pb.LogReplicaInfo) pb.LogStoreInf
 	return pb.LogStoreInfo{
 		Tick:     tick,
 		Replicas: replicas,
-	}
-}
-
-func mockTnShardInfo(shardID, replicaID uint64) pb.TNShardInfo {
-	return pb.TNShardInfo{
-		ShardID:   shardID,
-		ReplicaID: replicaID,
 	}
 }

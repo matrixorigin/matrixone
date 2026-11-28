@@ -165,7 +165,7 @@ func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64, builder *xorfil
 	}
 	var err error
 	for _, data := range vectors {
-		if err = containers.ForeachWindowBytes(data.GetDownstreamVector(), 0, data.Length(), op, nil); err != nil {
+		if err = containers.ForeachWindowBytes(data, 0, data.Length(), op, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -213,7 +213,7 @@ func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector, mp *mpool.
 		return nil
 	}
 
-	if err := containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil); err != nil {
+	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
 		positive.Free()
 		return false, nil, err
 	}

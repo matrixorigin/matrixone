@@ -114,6 +114,42 @@ class GPUContractTest(unittest.TestCase):
                     isa = "armv8-a" if self.target_arch == "aarch64" else "haswell"
                     self.assertIn(f"-march={isa}", result.stdout)
 
+    def test_incremental_gpu_archive_uses_objects_from_submakes(self):
+        root = self.project / "cgo"
+        root.mkdir()
+        for name in ("Makefile", "gpu-toolchain.mk"):
+            (root / name).symlink_to(REPO / "cgo" / name)
+        cuda = root / "cuda"
+        cuda.mkdir()
+        (cuda / "Makefile").write_text("cuda.o:\n\techo cuda > $@\n")
+        cuvs = root / "cuvs"
+        cuvs.mkdir()
+        (cuvs / "Makefile").write_text(
+            "libmocuvs.so: helper.o\n\tcp $< $@\n"
+            "helper.o: helper.cpp\n\tcp $< $@\n"
+        )
+        source = cuvs / "helper.cpp"
+
+        def build():
+            result = subprocess.run(
+                ["make", "-j4", "OBJS=", "libmo.a"], cwd=root, env=self.env,
+                text=True, capture_output=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout
+
+        # Use even-sized members so BSD ar and GNU ar return identical bytes.
+        source.write_bytes(b"initial\n")
+        build()
+        # Leave a definite timestamp gap even on a coarse-resolution filesystem.
+        for product in (cuda / "cuda.o", cuvs / "helper.o", cuvs / "libmocuvs.so", root / "libmo.a"):
+            os.utime(product, (1, 1))
+        source.write_bytes(b"updated\n")
+        build()
+        member = subprocess.check_output(["ar", "p", "libmo.a", "helper.o"], cwd=root)
+        self.assertEqual(member, b"updated\n")
+        self.assertNotIn("ar -rcs libmo.a", build())
+
     def test_shell_consumer_uses_link_only_stubs(self):
         result = self.shell()
         self.assertEqual(result.returncode, 0, result.stderr)
