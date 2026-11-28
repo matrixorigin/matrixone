@@ -144,10 +144,11 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		execUser("set enable_remap_hint = 0")
 		execUser("set @explain_id = 2")
 		execUser("prepare ordinary_update from 'update other set id = id where id = ?'")
-		requireExplain("explain execute ordinary_update using @explain_id")
+		requireExplain("explain force execute ordinary_update using @explain_id")
 		execUser("deallocate prepare ordinary_update")
 		execUser("prepare policy_update from 'update items set amount = 51 where id = ?'")
-		requireCode("explain execute policy_update using @explain_id", 20101)
+		requireCode("explain force execute policy_update using @explain_id", 20101)
+		requireCode("explain analyze force execute policy_update using @explain_id", 20101)
 		execUser("deallocate prepare policy_update")
 		func() {
 			prepared, err := conn.PrepareContext(ctx, "update items set amount = ? where id = ?")

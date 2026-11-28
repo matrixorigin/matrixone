@@ -48,6 +48,11 @@ func TestWritableRewriteSelectChecksEveryWrapper(t *testing.T) {
 	}
 }
 
+func TestDMLRewriteExplainPreservesPolicyOnPlanCopy(t *testing.T) {
+	query := &plan.Query{StmtType: plan.Query_UPDATE, HasTableRewrite: true}
+	require.Error(t, CheckDMLRewriteExplain(context.Background(), DeepCopyQuery(query)))
+}
+
 func TestRoleRuleDMLKeepsSinglePointScan(t *testing.T) {
 	const update = "update nation set n_name = 'updated' where n_nationkey = "
 	for _, tc := range []struct {
