@@ -6730,6 +6730,53 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 	}
 	inner := cur
 	withHosted := false
+	// adoptAuthoredPageClauses applies one pagination stage's ORDER BY (and
+	// its LIMIT) directly onto a clone of a pure, clause-free paren subject
+	// chain. A stage's ORDER BY is authored beside the subject, so its bare
+	// column references lexically belong to the subject's own FROM/WITH
+	// scope: wrapping the subject in a synthetic star page derives that
+	// scope away, and an unprojected sort name then falls through to an
+	// enclosing query - silently choosing by the outer column - or fails to
+	// resolve outright. Adopting the clauses onto the cloned chain's
+	// terminal select keeps the authored binding exactly like the inner
+	// spelling, while any clause-bearing or WITH-owning subject still takes
+	// the ordinary derived-page wrap below, and truly correlated references,
+	// aliases, qualified names and ordinals keep their existing resolution.
+	// No hidden output columns are introduced: the subject's projection
+	// stays precisely what it authored.
+	adoptAuthoredPageClauses := func(subject *tree.Select, limit *tree.Limit, orderBy tree.OrderBy, capture bool) (*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
+		if subject == nil {
+			return nil, nil, false
+		}
+		chk := subject
+		for {
+			if chk.Limit != nil || len(chk.OrderBy) > 0 || chk.With != nil ||
+				chk.IntoVars != nil || chk.Ep != nil || chk.RankOption != nil ||
+				chk.TimeWindow != nil || chk.SelectLockInfo != nil {
+				return nil, nil, false
+			}
+			paren, ok := chk.Select.(*tree.ParenSelect)
+			if !ok || paren.Select == nil {
+				break
+			}
+			chk = paren.Select
+		}
+		content, memo := cloneTreeSelectCorrespondence(subject, capture)
+		if content == nil {
+			return nil, nil, false
+		}
+		terminal := content
+		for {
+			paren, ok := terminal.Select.(*tree.ParenSelect)
+			if !ok || paren.Select == nil {
+				break
+			}
+			terminal = paren.Select
+		}
+		terminal.Limit = limit
+		terminal.OrderBy = orderBy
+		return content, memo, true
+	}
 	enclosingBoundary := len(enclosing)
 	for i := len(stages) - 1; i >= 0; i-- {
 		if len(enclosing) > 0 && i < enclosingBoundary && s.With != nil && !withHosted {
@@ -6763,6 +6810,62 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 			// A pure grouping wrapper without its own clauses is already the
 			// inner select's semantic: keep the body as bound.
 			continue
+		}
+		if len(orderBy) > 0 {
+			if adopted, memo, ok := adoptAuthoredPageClauses(inner, limit, orderBy, captureOrigins); ok {
+				if len(memo) > 0 {
+					if clauseMemo == nil {
+						clauseMemo = make(map[*tree.SelectClause]*tree.SelectClause, len(memo))
+					}
+					for k, v := range memo {
+						clauseMemo[k] = v
+					}
+					// Normalize where the clone layers meet. An adoption
+					// clone of the already-cloned WITH region records its
+					// counterparts against that intermediate copy (clone ->
+					// intermediate), while the region's own memo already
+					// binds the intermediate to the authored clause. The
+					// callers only canonicalize composed maps when a prior
+					// enclosing map exists, so a first-entered wrap would
+					// otherwise install the chain unresolved and capture
+					// under the discarded intermediate - leaving the
+					// authored freeze walk unable to reach the expansion.
+					// Resolve every entry to its final authored target here,
+					// bounded by the map size with a seen set, mirroring the
+					// callers' canonical composition.
+					for k, v := range clauseMemo {
+						final := v
+						seen := map[*tree.SelectClause]struct{}{final: {}}
+						for {
+							next, ok := clauseMemo[final]
+							if !ok || final == next {
+								break
+							}
+							if _, circular := seen[next]; circular {
+								break
+							}
+							seen[next] = struct{}{}
+							final = next
+						}
+						clauseMemo[k] = final
+					}
+				}
+				if stageWith != nil && i == len(stages)-1 {
+					// The withLevel-owning page moved its WITH out of the
+					// cloned content into stageWith before this loop; a
+					// successful native adoption must reattach that
+					// declaration to its authored region - the top of the
+					// adopted chain - or the subject would silently lose
+					// its CTE and bind a same-name enclosing relation
+					// instead (or fail on the missing relation outright).
+					// Clearing stageWith also preserves the single-attach
+					// invariant the wrap fallback below relies on.
+					adopted.With = stageWith
+					stageWith = nil
+				}
+				inner = adopted
+				continue
+			}
 		}
 		alias := tree.AliasClause{Alias: tree.Identifier(fmt.Sprintf("ordinary_cte_page_%d", i))}
 		wrapped := &tree.Select{

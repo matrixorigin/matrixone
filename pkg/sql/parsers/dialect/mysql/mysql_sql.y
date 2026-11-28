@@ -1040,6 +1040,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <privilegeLevel> priv_level
 %type <unresolveNames> column_name_list
 %type <unresolveNames> partition_column_name_list
+%type <unresolveNames> include_decl_name_list
 %type <unresolveNames> cluster_decl_name_list
 %type <partitionOption> partition_by_opt
 %type <clusterByOption> cluster_by_opt
@@ -7522,7 +7523,7 @@ time_window:
 	}
 
 interval:
-	INTERVAL '(' column_name ',' INTEGRAL ',' time_unit ')'
+	INTERVAL '(' column_decl_name ',' INTEGRAL ',' time_unit ')'
 	{
 		str := fmt.Sprintf("%v", $5)
 		v, errStr := util.GetInt64($5)
@@ -10412,7 +10413,7 @@ index_option:
         io.ITopkSize = val
         $$ = io
      }
-|   INCLUDE '(' column_name_list ')'
+|   INCLUDE '(' include_decl_name_list ')'
     {
         io := tree.NewIndexOption()
         io.IncludeColumns = $3
@@ -11785,6 +11786,21 @@ partition_column_name_list:
         $$ = []*tree.UnresolvedName{$1}
     }
 |   partition_column_name_list ',' column_decl_name
+    {
+        $$ = append($1, $3)
+    }
+
+// include_decl_name_list is confined to the index INCLUDE option: it
+// accepts the same declaration identifier rule (including the unquoted
+// END column this compatibility work admits at its true column-reference
+// positions) without widening the shared column_name_list used by
+// privilege contexts.
+include_decl_name_list:
+    column_decl_name
+    {
+        $$ = []*tree.UnresolvedName{$1}
+    }
+|   include_decl_name_list ',' column_decl_name
     {
         $$ = append($1, $3)
     }
