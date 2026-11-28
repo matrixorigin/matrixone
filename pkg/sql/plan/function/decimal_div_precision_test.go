@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -872,6 +873,82 @@ func TestTemporalCastToDecimal256Execution(t *testing.T) {
 	defer maskedDT.Free()
 	succeed, info = maskedDT.Run()
 	require.True(t, succeed, info)
+}
+
+func TestTemporalExplicitCastToDecimal256ClampsWithWarning(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	target39_30 := types.New(types.T_decimal256, 39, 30)
+	clamped39_30, err := clampDecimal256Value(false, 39, 30)
+	require.NoError(t, err)
+
+	dtVal := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 0)
+	dateVal := types.DateFromCalendar(2024, 1, 2)
+	tsVal := dtVal.ToTimestamp(time.UTC)
+	timeVal := types.TimeFromClock(false, 12, 34, 56, 0)
+	yearVal := types.MoYear(2024)
+
+	// DATETIME(20240102030405 = 14 integer digits) and TIMESTAMP exceed DECIMAL(39,30) (9 integer digits).
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"datetime", NewFunctionTestInput(types.New(types.T_datetime, 0, 0), []types.Datetime{dtVal}, nil)},
+		{"timestamp", NewFunctionTestInput(types.New(types.T_timestamp, 0, 0), []types.Timestamp{tsVal}, nil)},
+	} {
+		t.Run("explicit/"+tc.name, func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc.Session = session
+			c := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(target39_30, []types.Decimal256{}, nil)},
+				NewFunctionTestResult(target39_30, false, []types.Decimal256{clamped39_30}, nil),
+				NewExplicitCast,
+			)
+			defer c.Free()
+			ok, msg := c.Run()
+			require.True(t, ok, msg)
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, session.warnings[0].code)
+		})
+		t.Run("implicit/"+tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(target39_30, []types.Decimal256{}, nil)},
+				NewFunctionTestResult(target39_30, true, []types.Decimal256{{}}, nil),
+				NewCast,
+			)
+			defer c.Free()
+			_, castErr := c.DebugRun()
+			require.Error(t, castErr)
+		})
+	}
+
+	// DATE(8 digits), TIME(6 digits), YEAR(4 digits) overflow DECIMAL(39,36) (3 integer digits).
+	target39_36 := types.New(types.T_decimal256, 39, 36)
+	clamped39_36, err := clampDecimal256Value(false, 39, 36)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"date", NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateVal}, nil)},
+		{"time", NewFunctionTestInput(types.New(types.T_time, 0, 0), []types.Time{timeVal}, nil)},
+		{"year", NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{yearVal}, nil)},
+	} {
+		t.Run("explicit/"+tc.name, func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc.Session = session
+			c := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(target39_36, []types.Decimal256{}, nil)},
+				NewFunctionTestResult(target39_36, false, []types.Decimal256{clamped39_36}, nil),
+				NewExplicitCast,
+			)
+			defer c.Free()
+			ok, msg := c.Run()
+			require.True(t, ok, msg)
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, session.warnings[0].code)
+		})
+	}
 }
 
 func min32(a, b int32) int32 {

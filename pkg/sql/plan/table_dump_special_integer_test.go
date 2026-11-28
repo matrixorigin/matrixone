@@ -834,3 +834,57 @@ func TestPreparedExactDivisionUsesDivPrecisionIncrement(t *testing.T) {
 		require.Equal(t, types.New(types.T_decimal256, 40, 30), makeTypeByPlan2Expr(division))
 	})
 }
+
+func TestTableDumpWideGeneratedDivisionSchema(t *testing.T) {
+	const generatedCount = 1500
+	for _, tc := range []struct {
+		name      string
+		legacyDiv bool
+		increment int64
+	}{
+		{name: "current_default_inc", legacyDiv: false, increment: 4},
+		{name: "current_max_inc", legacyDiv: false, increment: 30},
+		{name: "legacy_float_div", legacyDiv: true, increment: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			compiler := divPrecisionCompilerContext{
+				CompilerContext: NewMockCompilerContext(false, proc),
+				increment:       tc.increment,
+			}
+			sampleStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a int, g0 double generated always as (a / 2) stored) charset=utf8mb4", 1)
+			require.NoError(t, err)
+			defer sampleStmt.Free()
+
+			ctx := compiler.GetContext()
+			if tc.legacyDiv {
+				ctx = function.WithLegacyIntegerFloatDiv(ctx)
+			}
+			mock := NewMockCompilerContext(false, proc)
+			mock.tables["t"] = &planpb.TableDef{Name: "t"}
+			sampleCompiler := divPrecisionCompilerContext{
+				CompilerContext: mock,
+				increment:       tc.increment,
+			}
+			samplePlan, err := BuildPlan(struct {
+				CompilerContext
+				ctx context.Context
+			}{sampleCompiler, ctx}, sampleStmt, false, nil)
+			require.NoError(t, err)
+			sampleDef := samplePlan.GetDdl().GetCreateTable().GetTableDef()
+			sampleGen := sampleDef.Cols[1]
+
+			cols := make([]*planpb.ColDef, 0, generatedCount+1)
+			cols = append(cols, proto.Clone(sampleDef.Cols[0]).(*planpb.ColDef))
+			for i := 0; i < generatedCount; i++ {
+				col := proto.Clone(sampleGen).(*planpb.ColDef)
+				col.Name = fmt.Sprintf("g%d", i)
+				col.ColId = uint64(i + 1)
+				cols = append(cols, col)
+			}
+			def := &planpb.TableDef{Name: "t", Cols: cols}
+			_, err = AnalyzeTableDumpBindings(compiler, def, def)
+			require.NoError(t, err)
+		})
+	}
+}

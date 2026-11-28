@@ -202,13 +202,6 @@ func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 	parseString func(string) (D, error), fromFloat func(float64) (D, error),
 	fromDatetime func(types.Datetime) (D, error), clamp func(bool) (D, error), strict, assignment bool,
 ) (bool, error) {
-	// Temporal DECIMAL256 casts are not part of the supported cast overloads.
-	if fromDatetime == nil {
-		switch from.GetType().Oid {
-		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
-			return false, nil
-		}
-	}
 	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 	warnScaleLoss := func(value string) bool {
 		return assignment && DecimalAssignmentLosesScale(value, to.GetType().Scale)
@@ -238,6 +231,11 @@ func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 			// Quantize once at the final scale, before checking the target width.
 			func(value types.Time) (D, error) { return parseString(value.NumericString(6)) },
 			func(value types.Time) bool { return value < 0 }, nil, clamp, strict)
+	case types.T_year:
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.MoYear](from), to, length, proc, selectList,
+			func(value types.MoYear) (D, error) { return parseString(strconv.FormatUint(uint64(value), 10)) },
+			func(types.MoYear) bool { return false }, nil, clamp, strict)
 	case types.T_bool:
 		// TRUE is exactly 1 and FALSE exactly 0, so the explicit cast reuses
 		// the integer parse path, including the out-of-range clamp that
@@ -370,22 +368,28 @@ func explicitNumericToDecimal(
 				return clampDecimal128Value(negative, toType.Width, toType.Scale)
 			}, strict, assignment)
 	case types.T_decimal256:
+		width := toType.Width
+		if width <= 0 {
+			width = types.DecimalMaxPrecision(types.T_decimal256)
+		}
 		return explicitNumericToDecimalTarget(
 			from, vector.MustFunctionResult[types.Decimal256](result), length, proc, selectList,
 			func(value string) (types.Decimal256, error) {
-				return parseDecimal256CastString(value, toType.Width, toType.Scale)
+				return parseDecimal256CastString(value, width, toType.Scale)
 			},
 			func(value float64) (types.Decimal256, error) {
-				result, err := types.Decimal256FromFloat64(value, toType.Width, toType.Scale)
+				result, err := types.Decimal256FromFloat64(value, width, toType.Scale)
 				if err != nil && !math.IsNaN(value) && !math.IsInf(value, 0) {
 					return parseDecimal256CastString(
-						strconv.FormatFloat(value, 'g', -1, 64), toType.Width, toType.Scale)
+						strconv.FormatFloat(value, 'g', -1, 64), width, toType.Scale)
 				}
 				return result, err
 			},
-			nil,
+			func(value types.Datetime) (types.Decimal256, error) {
+				return parseDecimal256CastString(packedDatetimeDecimalString(value), width, toType.Scale)
+			},
 			func(negative bool) (types.Decimal256, error) {
-				return clampDecimal256Value(negative, toType.Width, toType.Scale)
+				return clampDecimal256Value(negative, width, toType.Scale)
 			}, strict, assignment)
 	default:
 		return false, nil

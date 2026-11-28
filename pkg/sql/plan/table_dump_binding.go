@@ -888,6 +888,24 @@ func matchTableDumpSessions(want *planpb.Expr, zone *time.Location, locale strin
 	return false, nil
 }
 
+// tableDumpHasDecimalType reports whether expr or any subexpression has a DECIMAL type.
+func tableDumpHasDecimalType(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	found := false
+	_ = planpb.VisitExprTree(expr, func(node *planpb.Expr) error {
+		if found || node == nil {
+			return nil
+		}
+		if types.T(node.Typ.Id).IsDecimal() {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 // tableDumpDDLColumnScope recreates CREATE's pre-catalog column declarations.
 // The returned witness owns its changed columns; persisted declarations stay exact.
 func tableDumpDDLColumnScope(target *planpb.TableDef) *planpb.TableDef {
@@ -1079,6 +1097,10 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					modes = append(modes, mode|tableDumpBindingDDLColumnScope)
 				}
 			}
+			want := item.expr
+			if supplied != nil {
+				want = sourceItems[i].expr
+			}
 			if visit.hasDivision {
 				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
 					modes = append(modes, mode|tableDumpBindingLegacyIntegerFloatDiv)
@@ -1093,9 +1115,18 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 				if integerDecimal {
 					// Compose complete eras, without redundant precision/integer
-					// combinations: the integer era already predates precision.
+					// combinations: the integer era already predates precision,
+					// and pre-integer-decimal expressions necessarily predate
+					// the DECIMAL integer-division change.
 					for _, mode := range baseModes {
-						modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
+						if visit.hasDivision && mode&tableDumpBindingLegacyIntegerFloatDiv != 0 {
+							continue
+						}
+						combined := mode | tableDumpBindingPreIntegerDecimal
+						if visit.hasDivision {
+							combined |= tableDumpBindingLegacyIntegerFloatDiv
+						}
+						modes = append(modes, combined)
 					}
 				}
 			}
@@ -1134,10 +1165,6 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				return result, err
 			}
 			var first *planpb.Expr
-			want := item.expr
-			if supplied != nil {
-				want = sourceItems[i].expr
-			}
 			matchCandidate := func(mode tableDumpBindingMode, candidate *planpb.Expr) (accepted bool, matchErr error) {
 				defer func() {
 					if accepted && matchErr == nil && item.kind == "default" {
@@ -1182,19 +1209,26 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			var sessions []tableDumpSessionCandidate
 			var probes []*legacyFloatSessionProbe
 			probeKeys := make(map[string]int)
-			for increment := int64(0); increment <= maxIncrement; increment++ {
+			incrementInvariantModes := make(map[tableDumpBindingMode]bool)
+			for increment := int64(0); increment <= maxIncrement && !(matched && sensitive); increment++ {
 				if err := ctx.GetContext().Err(); err != nil {
 					stmt.Free()
 					return false, err
 				}
 				needsIncompleteEra := true
-				for modeIndex := 0; modeIndex < len(modes); modeIndex++ {
+				for modeIndex := 0; modeIndex < len(modes) && !(matched && sensitive); modeIndex++ {
 					mode := modes[modeIndex]
+					if increment > 0 && incrementInvariantModes[mode] {
+						continue
+					}
 					if item.kind == "default" && mode&tableDumpBindingPreIncompleteTemporal != 0 && !needsIncompleteEra {
 						continue
 					}
 					dependency = tableDumpDefaultSession{captureUnfolded: item.kind == "default"}
 					candidate, err := bind(increment, mode, zone, locale)
+					if increment == 0 && err == nil && candidate != nil && !tableDumpHasDecimalType(candidate) {
+						incrementInvariantModes[mode] = true
+					}
 					if normalizedDecimal && dependency.floatFormatting && !integerDecimal {
 						// A persisted ALTER may already have removed the old casts.
 						// Expand once, only after the independent SQL binding confirms
