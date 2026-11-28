@@ -269,7 +269,12 @@ func (s *serverConn) parseConnID(p *frontend.Packet) error {
 	if pos+3 >= int(p.Length) {
 		return moerr.NewInternalErrorNoCtx("protocol error: cannot parse connection ID")
 	}
-	s.connID = binary.LittleEndian.Uint32(p.Payload[pos : pos+4])
+	connID := binary.LittleEndian.Uint32(p.Payload[pos : pos+4])
+	if s.sentExtraInfo && connID != s.expectedConnID {
+		return newConnectErr(moerr.NewInternalErrorNoCtxf(
+			"backend handshake connection ID mismatch: expected %d, received %d", s.expectedConnID, connID))
+	}
+	s.connID = connID
 	return nil
 }
 

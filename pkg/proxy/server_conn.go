@@ -85,6 +85,9 @@ type serverConn struct {
 	conn net.Conn
 	// connID is the proxy connection ID, which is not useful in most case.
 	connID uint32
+	// expectedConnID is the ID in the ExtraInfo sent on this connection.
+	expectedConnID uint32
+	sentExtraInfo  bool
 	// mysqlProto is used to build handshake info.
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
@@ -277,6 +280,8 @@ func newServerConnContext(
 		cnServer:         cn,
 		conn:             c,
 		connID:           nextServerConnID(),
+		expectedConnID:   cn.connID,
+		sentExtraInfo:    true,
 		rebalancer:       r,
 		createTime:       time.Now(),
 		diagnosticLogger: diagnosticLogger,
