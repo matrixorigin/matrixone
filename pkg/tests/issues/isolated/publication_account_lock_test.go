@@ -26,12 +26,14 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,6 +68,19 @@ func openAccountLockSQL(t *testing.T, cluster embed.Cluster, index int) (*sql.DB
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	return db, cn.ServiceID()
+}
+
+// A different CN can pick a snapshot before the writer's commit is applied.
+func waitAccountLockCommit(t *testing.T, cluster embed.Cluster, writerIndex, readerIndex int) {
+	t.Helper()
+	writer, err := cluster.GetCNService(writerIndex)
+	require.NoError(t, err)
+	reader, err := cluster.GetCNService(readerIndex)
+	require.NoError(t, err)
+
+	commit := writer.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+	require.False(t, commit.IsEmpty())
+	testutils.WaitLogtailApplied(t, commit, reader)
 }
 
 func TestDropAccountWithMinimumRowLockCount(t *testing.T) {
@@ -281,6 +296,7 @@ func TestCreatePublicationBeyondLockSliceCapacity(t *testing.T) {
 	publisher, _ := openAccountLockSQL(t, cluster, 1)
 	_, err = publisher.ExecContext(ctx, "create publication wide_pub database wide_db account "+strings.Join(names, ","))
 	require.NoError(t, err)
+	waitAccountLockCommit(t, cluster, 1, 0)
 	rows, err := owner.QueryContext(ctx, `select sub_account_name from mo_catalog.mo_subs where pub_account_id=0 and pub_name='wide_pub' and status=0 order by sub_account_name`)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -379,6 +395,7 @@ func TestRestoreClusterRemotePublicationLocks(t *testing.T) {
 	restore, restoreCN := openAccountLockSQL(t, cluster, 1)
 	require.True(t, lockservice.GetLockServiceByServiceID(restoreCN).GetConfig().EnableRemoteLocalProxy)
 	exec(restore, "restore cluster {snapshot='pub_lock_snapshot'}")
+	waitAccountLockCommit(t, cluster, 1, 0)
 	var pubs, grants int
 	require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_pubs where account_id=0 and database_name='restore_pub_db' and pub_name in ('a_all','b_named')").Scan(&pubs))
 	require.NoError(t, owner.QueryRowContext(ctx, "select count(distinct pub_name) from mo_catalog.mo_subs where pub_account_id=0 and pub_name in ('a_all','b_named') and sub_account_name='restore_sub' and status=0").Scan(&grants))
