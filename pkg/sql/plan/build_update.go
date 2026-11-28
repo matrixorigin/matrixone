@@ -112,7 +112,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
+	lastNodeId = appendGeneratedColumnsForUpdate(builder, queryBindCtx, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if stmt.From != nil && len(stmt.From.Tables) > 0 && tblInfo.needAggFilter {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		lastNodeId, _, _, err = builder.appendRowNumberDedupNode(
@@ -313,13 +313,19 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	return nil
 }
 
-func rewriteGeneratedColumnsForUpdate(
+func appendGeneratedColumnsForUpdate(
 	builder *QueryBuilder,
+	bindCtx *BindContext,
 	planCtxs []*dmlPlanCtx,
 	lastNodeId int32,
 	isIgnore bool,
-) {
-	selectNode := builder.qry.Nodes[lastNodeId]
+) int32 {
+	// The child PROJECT evaluates assignments. This projection only reads the
+	// resulting slots when the optimizer cannot safely inline its expressions.
+	// Keep the existing compact layout for inlineable deterministic expressions.
+	source := builder.qry.Nodes[lastNodeId]
+	materialize := slices.ContainsFunc(source.ProjectList, func(expr *Expr) bool { return !exprCanRemoveProject(expr) })
+	var project []*Expr
 	tableBase := int32(0)
 	for _, upPlanCtx := range planCtxs {
 		tableDef := upPlanCtx.tableDef
@@ -331,12 +337,18 @@ func rewriteGeneratedColumnsForUpdate(
 			}
 		}
 		if hasGenerated {
+			if project == nil {
+				project = source.ProjectList
+				if materialize {
+					project = getProjectionByLastNodeWithTag(builder, lastNodeId, 0)
+				}
+			}
 			baseLookup := make([]*plan.Expr, len(tableDef.Cols))
 			for ci, col := range tableDef.Cols {
 				if newOff, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
-					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(newOff)]
+					baseLookup[ci] = project[tableBase+int32(newOff)]
 				} else {
-					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(ci)]
+					baseLookup[ci] = project[tableBase+int32(ci)]
 				}
 			}
 			for ci, col := range tableDef.Cols {
@@ -354,9 +366,7 @@ func rewriteGeneratedColumnsForUpdate(
 				)
 				genExpr = substituteColRefsInExpr(genExpr, baseLookup, 0)
 				insertPos := int(tableBase) + len(tableDef.Cols) + upPlanCtx.updateColLength
-				selectNode.ProjectList = append(selectNode.ProjectList, nil)
-				copy(selectNode.ProjectList[insertPos+1:], selectNode.ProjectList[insertPos:])
-				selectNode.ProjectList[insertPos] = genExpr
+				project = slices.Insert(project, insertPos, genExpr)
 				newOffset := int32(insertPos) - tableBase
 				upPlanCtx.updateColPosMap[col.Name] = int(newOffset)
 				upPlanCtx.updateColLength++
@@ -365,6 +375,19 @@ func rewriteGeneratedColumnsForUpdate(
 		}
 		tableBase += int32(len(tableDef.Cols) + upPlanCtx.updateColLength)
 	}
+	if project == nil {
+		return lastNodeId
+	}
+	if !materialize {
+		source.ProjectList = project
+		return lastNodeId
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		BindingTags: []int32{builder.genNewBindTag()},
+		ProjectList: project,
+	}, bindCtx)
 }
 
 // affectedGeneratedColumns returns the dependency closure in table column order.
@@ -484,13 +507,84 @@ func appendForeignKeyGeneratedUpdate(
 		update.updateColPosMap[col.Name] = rowPositions[i]
 		update.updateColLength++
 	}
-	last, err = appendGeneratedOutgoingFKChecks(builder, bindCtx, last, rowTag, table, generated, rowPositions)
-	return last, rowTag, err
+	var checked, restricted []*plan.ForeignKeyDef
+	for _, fk := range table.Fkeys {
+		if updatedGeneratedFKColumn(table, fk, generated, rowPositions) == "" {
+			continue
+		}
+		stable, err := generatedFKParentIsStable(builder, bindCtx, update.fkActionRoot, fk.ForeignTbl)
+		if err != nil {
+			return -1, rowTag, err
+		}
+		if stable {
+			checked = append(checked, fk)
+		} else {
+			restricted = append(restricted, fk)
+		}
+	}
+	if len(restricted) > 0 {
+		restrictedTable := *table
+		restrictedTable.Fkeys = restricted
+		last, err = appendGeneratedOutgoingFKChecks(builder, bindCtx, last, rowTag, &restrictedTable, generated, rowPositions)
+		if err != nil {
+			return -1, rowTag, err
+		}
+	}
+	if len(checked) == 0 {
+		return last, rowTag, nil
+	}
+	checkedTable := *table
+	checkedTable.Fkeys = checked
+	return appendGeneratedOutgoingFKLookup(builder, bindCtx, last, rowTag, &checkedTable, rowPositions)
 }
 
-// Recursive writes trust the triggering FK's assignments. A final outgoing
-// key containing NULL needs no parent match. A changed, non-NULL generated
-// key cannot rely on the triggering FK's check.
+func updatedGeneratedFKColumn(table *TableDef, fk *plan.ForeignKeyDef, generated, rowPositions []int) string {
+	for _, i := range generated {
+		col := table.Cols[i]
+		if rowPositions[i] != i && slices.Contains(fk.Cols, col.ColId) {
+			return col.Name
+		}
+	}
+	return ""
+}
+
+// An outgoing parent can be checked against the current snapshot only when
+// this statement cannot change it. Actions flow from the sole explicit target
+// to its FK descendants, so walk upstream from the prospective parent.
+func generatedFKParentIsStable(builder *QueryBuilder, bindCtx *BindContext, root, parent uint64) (bool, error) {
+	if root == 0 || parent == 0 {
+		return false, nil
+	}
+	pending := []uint64{parent}
+	seen := make(map[uint64]struct{})
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if id == root {
+			return false, nil
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		_, table, err := builder.compCtx.ResolveById(id, bindCtx.snapshot)
+		if err != nil {
+			return false, err
+		}
+		if table == nil {
+			return false, nil
+		}
+		for _, fk := range table.Fkeys {
+			if fk.ForeignTbl != 0 {
+				pending = append(pending, fk.ForeignTbl)
+			}
+		}
+	}
+	return true, nil
+}
+
+// If a parent may change in this statement, the snapshot alone cannot prove a
+// new reference. Retain the existing unchanged/NULL rule for those parents.
 func appendGeneratedOutgoingFKChecks(
 	builder *QueryBuilder, bindCtx *BindContext, last int32, rowTag int32,
 	table *TableDef, generated, rowPositions []int,
@@ -499,14 +593,7 @@ func appendGeneratedOutgoingFKChecks(
 	var assertions []*Expr
 	ctx := builder.GetContext()
 	for _, fk := range table.Fkeys {
-		var generatedName string
-		for _, i := range generated {
-			col := table.Cols[i]
-			if rowPositions[i] != i && slices.Contains(fk.Cols, col.ColId) {
-				generatedName = col.Name
-				break
-			}
-		}
+		generatedName := updatedGeneratedFKColumn(table, fk, generated, rowPositions)
 		if generatedName == "" {
 			continue
 		}
@@ -514,7 +601,6 @@ func appendGeneratedOutgoingFKChecks(
 			projection = getProjectionByLastNodeWithTag(builder, last, rowTag)
 		}
 		nullableParts := make([]*Expr, 0, len(fk.Cols)+1)
-		unchangedParts := make([]*Expr, 0, len(fk.Cols))
 		for i, col := range table.Cols {
 			if !slices.Contains(fk.Cols, col.ColId) {
 				continue
@@ -525,18 +611,8 @@ func appendGeneratedOutgoingFKChecks(
 				return -1, err
 			}
 			nullableParts = append(nullableParts, isNull)
-			if rowPositions[i] != i {
-				// Like ordinary FK checks, use SQL equality, not the index encoding.
-				equal, err := BindFuncExprImplByPlanExpr(ctx, "<=>", []*Expr{
-					DeepCopyExpr(projection[i]), DeepCopyExpr(final),
-				})
-				if err != nil {
-					return -1, err
-				}
-				unchangedParts = append(unchangedParts, equal)
-			}
 		}
-		unchanged, err := combinePlanConjunction(ctx, unchangedParts)
+		unchanged, err := generatedOutgoingFKUnchanged(ctx, table, fk, projection, rowPositions)
 		if err != nil {
 			return -1, err
 		}
@@ -558,6 +634,96 @@ func appendGeneratedOutgoingFKChecks(
 		projection = nil // column remapping builds the executable projection
 	}
 	return builder.appendDMLRowFilter(bindCtx, last, assertions, projection), nil
+}
+
+func generatedOutgoingFKUnchanged(ctx context.Context, table *TableDef, fk *plan.ForeignKeyDef, projection []*Expr, rowPositions []int) (*Expr, error) {
+	parts := make([]*Expr, 0, len(fk.Cols))
+	for i, col := range table.Cols {
+		if rowPositions[i] == i || !slices.Contains(fk.Cols, col.ColId) {
+			continue
+		}
+		// Like ordinary FK checks, use SQL equality, not the index encoding.
+		equal, err := BindFuncExprImplByPlanExpr(ctx, "<=>", []*Expr{
+			DeepCopyExpr(projection[i]), DeepCopyExpr(projection[rowPositions[i]]),
+		})
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, equal)
+	}
+	return combinePlanConjunction(ctx, parts)
+}
+
+// Use the ordinary child FK key locks and MATCH SIMPLE lookup on the final
+// row. Legacy DELETE/UPDATE build actions after column remapping, so isolate
+// their new tagged lookup behind a sink and remap only that subtree.
+func appendGeneratedOutgoingFKLookup(builder *QueryBuilder, bindCtx *BindContext, last, rowTag int32,
+	table *TableDef, rowPositions []int) (int32, int32, error) {
+	positional := builder.sinkColRef != nil
+	lookupTag := builder.genNewBindTag()
+	if positional {
+		source := builder.appendStep(appendSinkNode(builder, bindCtx, last))
+		last = builder.appendTaggedSinkScan(bindCtx, source, lookupTag)
+	} else {
+		last = builder.appendNode(&Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{last}, BindingTags: []int32{lookupTag},
+			ProjectList: getProjectionByLastNodeWithTag(builder, last, rowTag),
+		}, bindCtx)
+	}
+	firstLookupStep := len(builder.qry.Steps)
+	projection := getProjectionByLastNodeWithTag(builder, last, lookupTag)
+	last, oks, err := builder.appendModernChildFkMarkOks(bindCtx, table, last, lookupTag, func(name string) int32 {
+		return int32(rowPositions[table.Name2ColIndex[name]])
+	})
+	if err != nil {
+		return -1, rowTag, err
+	}
+	ctx := builder.GetContext()
+	assertions := make([]*Expr, len(oks))
+	for i, ok := range oks {
+		unchanged, err := generatedOutgoingFKUnchanged(ctx, table, table.Fkeys[i], projection, rowPositions)
+		if err != nil {
+			return -1, rowTag, err
+		}
+		allowed, err := BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{ok, unchanged})
+		if err != nil {
+			return -1, rowTag, err
+		}
+		assertions[i], err = BindFuncExprImplByPlanExpr(ctx, "assert", []*Expr{
+			allowed,
+			makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails"),
+			makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert),
+		})
+		if err != nil {
+			return -1, rowTag, err
+		}
+	}
+	last = builder.appendDMLRowFilter(bindCtx, last, assertions, nil)
+	newTag := builder.genNewBindTag()
+	last = builder.appendNode(&Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{last}, BindingTags: []int32{newTag}, ProjectList: projection,
+	}, bindCtx)
+	if !positional {
+		return last, newTag, nil
+	}
+	// Late DML optimization does not populate stats for new scan leaves.
+	ReCalcNodeStats(last, builder, true, true, true)
+	colRefBool := make(map[[2]int32]bool)
+	sinkColRef := make(map[[2]int32]int)
+	finalStep := builder.appendStep(last)
+	for step := finalStep; step >= int32(firstLookupStep); step-- {
+		colRefs := make(map[[2]int32]int)
+		if step == finalStep {
+			for i := range projection {
+				colRefs[[2]int32{newTag, int32(i)}] = 1
+			}
+		}
+		if _, err := builder.remapAllColRefs(builder.qry.Steps[step], step, colRefs, colRefBool, sinkColRef); err != nil {
+			return -1, rowTag, err
+		}
+	}
+	builder.qry.Steps = builder.qry.Steps[:finalStep]
+	return last, 0, nil
 }
 
 // bindGeneratedPhysicalKeyEqual checks whether the existing encoded key can

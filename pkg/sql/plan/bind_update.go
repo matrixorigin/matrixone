@@ -352,6 +352,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
+	var generatedProject []*plan.Expr
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
@@ -359,24 +360,37 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		tableDef := dmlCtx.tableDefs[i]
 
-		// Recompute generated columns after UPDATE FROM dedup so generated
-		// expressions read the same deduped base values that will be written.
+		// Generate from the evaluated assignment slots after UPDATE FROM dedup,
+		// not by copying expressions like NEXTVAL into the generated columns.
 		for _, col := range tableDef.Cols {
 			if col.GeneratedCol == nil {
 				continue
+			}
+			if generatedProject == nil {
+				generatedProject = getProjectionByLastNodeWithTag(builder, lastNodeID, selectNodeTag)
 			}
 			genExpr := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				stmt.Ignore,
 			)
-			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
+			genExpr = substituteColRefsInExpr(genExpr, generatedProject, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
 			newColName2Idx[alias+"."+col.Name] = oldPos
-			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
-			selectNode.ProjectList[oldPos] = genExpr
+			oldColName2Idx[alias+"."+col.Name] = int32(len(generatedProject))
+			generatedProject = append(generatedProject, generatedProject[oldPos])
+			generatedProject[oldPos] = genExpr
 		}
+	}
+	if generatedProject != nil {
+		selectNodeTag = builder.genNewBindTag()
+		selectNode = &plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{selectNodeTag},
+			ProjectList: generatedProject,
+		}
+		lastNodeID = builder.appendNode(selectNode, bindCtx)
 	}
 
 	fkChecksEnabled, err := IsForeignKeyChecksEnabled(builder.compCtx)

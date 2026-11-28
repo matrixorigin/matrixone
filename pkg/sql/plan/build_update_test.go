@@ -73,3 +73,53 @@ func TestGeneratedOutgoingFKChecksUseSQLEquality(t *testing.T) {
 	require.False(t, allowed.GetNulls().Any())
 	require.Equal(t, []bool{true, false, true, true}, vector.MustFixedColNoTypeCheck[bool](allowed))
 }
+
+func TestGeneratedFKParentMustBeOutsideActionClosure(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.id2name = map[uint64]string{2: "outside", 3: "child", 4: "descendant", 5: "cycle_a", 6: "cycle_b"}
+	ctx.tables = map[string]*TableDef{
+		"outside":    {TblId: 2},
+		"child":      {TblId: 3, Fkeys: []*plan.ForeignKeyDef{{ForeignTbl: 1}}},
+		"descendant": {TblId: 4, Fkeys: []*plan.ForeignKeyDef{{ForeignTbl: 3}}},
+		"cycle_a":    {TblId: 5, Fkeys: []*plan.ForeignKeyDef{{ForeignTbl: 6}}},
+		"cycle_b":    {TblId: 6, Fkeys: []*plan.ForeignKeyDef{{ForeignTbl: 5}}},
+	}
+	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	for _, tc := range []struct {
+		name         string
+		root, parent uint64
+		stable       bool
+	}{
+		{"independent", 1, 2, true},
+		{"root", 1, 1, false},
+		{"descendant", 1, 4, false},
+		{"independent cycle", 1, 5, true},
+		{"self reference", 1, 0, false},
+		{"ambiguous root", 0, 2, false},
+		{"missing definition", 1, 7, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stable, err := generatedFKParentIsStable(builder, bindCtx, tc.root, tc.parent)
+			require.NoError(t, err)
+			require.Equal(t, tc.stable, stable)
+		})
+	}
+}
+
+func TestReduceSinkScanKeepsFKMarkJoinInputs(t *testing.T) {
+	q := &Query{
+		Nodes: []*Node{
+			{NodeType: plan.Node_LOCK_OP},
+			{NodeType: plan.Node_SINK, Children: []int32{0}},
+			{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
+			{NodeType: plan.Node_TABLE_SCAN},
+			{NodeType: plan.Node_JOIN, JoinType: plan.Node_MARK, Children: []int32{2, 3}},
+		},
+		Steps: []int32{1, 4},
+	}
+	reduceSinkSinkScanNodes(q)
+	require.Equal(t, []int32{1, 4}, q.Steps)
+	require.Equal(t, []int32{2, 3}, q.Nodes[4].Children)
+	require.Equal(t, []int32{0}, q.Nodes[2].SourceStep)
+}

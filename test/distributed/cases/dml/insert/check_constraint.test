@@ -106,6 +106,24 @@ insert into update_check values (2, 100, 0) on duplicate key update a = 3;
 select * from update_check where id = 2;
 
 set foreign_key_checks = 1;
+
+-- Volatile assignments must feed the generated chain and CHECK only once.
+create sequence check_generated_seq start with 10;
+create table check_generated_update(
+    id int primary key, x bigint,
+    g bigint generated always as (x * 2) stored,
+    h bigint generated always as (g + x) stored,
+    check(g = x * 2 and h = x * 3)
+);
+insert into check_generated_update(id, x) values (1, 1);
+update check_generated_update set x = nextval('check_generated_seq') where id = 1;
+select x, g, h, currval('check_generated_seq') as sequence_value from check_generated_update;
+update check_generated_update t set x = nextval('check_generated_seq') from update_peer p where t.id = p.id;
+select x, g, h, currval('check_generated_seq') as sequence_value from check_generated_update;
+update check_generated_update t join update_peer p on t.id = p.id
+    set t.x = nextval('check_generated_seq'), p.v = p.v;
+select x, g, h, currval('check_generated_seq') as sequence_value from check_generated_update;
+
 create table fk_check_parent(id int primary key);
 create table fk_check_child(
     id int primary key, pid int, upper_bound int,
@@ -203,15 +221,17 @@ create table fk_stable_child(
     foreign key(pid) references fk_stable_parent(id) on delete set null,
     foreign key(g) references fk_stable_reference(id)
 );
-insert into fk_stable_parent values (1), (2);
-insert into fk_stable_reference values (1), (2);
-insert into fk_stable_child(id, pid, fallback) values (10, 1, 1), (20, 2, 99);
+insert into fk_stable_parent values (1), (2), (3), (4);
+insert into fk_stable_reference values (1), (2), (3), (4);
+insert into fk_stable_child(id, pid, fallback) values (10, 1, 1), (20, 2, 99), (30, 3, 2), (40, 4, 2);
 
--- A changed outgoing key rejects the entire action, including rows whose key is stable.
-delete from fk_stable_parent where id in (1, 2);
+-- A missing parent rejects the entire action, including valid changes.
+delete from fk_stable_parent where id in (1, 2, 3);
 select id from fk_stable_parent order by id;
 select id, pid, g from fk_stable_child order by id;
-delete from fk_stable_parent where id = 1;
+-- Same-value and changed-but-valid keys survive both child write routes.
+delete from fk_stable_parent where id in (1, 3);
+replace into fk_stable_parent values (4);
 select id from fk_stable_parent order by id;
 select id, pid, g from fk_stable_child order by id;
 

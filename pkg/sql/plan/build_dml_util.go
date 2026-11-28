@@ -110,10 +110,11 @@ type dmlPlanCtx struct {
 	checkMode              updateCheckMode
 	allDelTableIDs         map[uint64]struct{}
 	allDelTables           map[FkReferKey]struct{}
-	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
-	lockTable              bool //we need lock table in stmt: delete from tbl
-	checkInsertPkDup       bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
-	updatePkCol            bool //if update stmt will update the primary key or one of pks
+	fkActionRoot           uint64 // single explicit write target; zero if no root is proven
+	isFkRecursionCall      bool   //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
+	lockTable              bool   //we need lock table in stmt: delete from tbl
+	checkInsertPkDup       bool   //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
+	updatePkCol            bool   //if update stmt will update the primary key or one of pks
 	pkFilterExprs          []*Expr
 	isDeleteWithoutFilters bool
 	// skipTargetDelete reuses the parent-reference action planner for a row set
@@ -650,6 +651,10 @@ func appendRecursiveCascadeLockNode(
 	[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
+	fkActionRoot := delCtx.fkActionRoot
+	if !delCtx.isFkRecursionCall && !delCtx.isMulti && len(delCtx.allDelTableIDs) <= 1 {
+		fkActionRoot = delCtx.tableDef.TblId
+	}
 	appendDeleteSourceScan := func() int32 {
 		var nodeID int32
 		if delCtx.sourceTag != 0 {
@@ -1202,6 +1207,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.updateColPosMap = updateMap
 					upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 					upPlanCtx.isFkRecursionCall = true
+					upPlanCtx.fkActionRoot = fkActionRoot
 					upPlanCtx.updatePkCol = false
 					upPlanCtx.preserveUpdateSourceProjection = true
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false, false)
@@ -1597,6 +1603,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.updateColPosMap = updateChildColPosMap
 						upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 						upPlanCtx.isFkRecursionCall = true
+						upPlanCtx.fkActionRoot = fkActionRoot
 						upPlanCtx.updatePkCol = updatePk
 						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
 
@@ -1646,6 +1653,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.updateColPosMap = updateChildColPosMap
 								upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 								upPlanCtx.isFkRecursionCall = true
+								upPlanCtx.fkActionRoot = fkActionRoot
 								upPlanCtx.updatePkCol = updatePk
 
 								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false, false)
@@ -1716,6 +1724,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.beginIdx = 0
 								upPlanCtx.allDelTableIDs = allDelTableIDs
 								upPlanCtx.isFkRecursionCall = true
+								upPlanCtx.fkActionRoot = fkActionRoot
 
 								err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 								putDmlPlanCtx(upPlanCtx)
@@ -4555,8 +4564,10 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	// merge one sink to one sinkScan
 	pointToNodeMap := make(map[int32][]int32)
 	for sinkNodeId, meta := range sinks {
-		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive && qry.Nodes[sinkNodeId].UpdateCountCtx == nil {
+		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive &&
+			qry.Nodes[sinkNodeId].UpdateCountCtx == nil && len(qry.Nodes[meta.scans[0].preNodeId].Children) == 1 {
 			// one sink to one sinkScan
+			// Only replace a unary consumer's inputs; a join also owns a sibling input.
 			sinkNode := qry.Nodes[sinkNodeId]
 			sinkScanPreNode := qry.Nodes[meta.scans[0].preNodeId]
 			sinkScanPreNode.Children = sinkNode.Children
