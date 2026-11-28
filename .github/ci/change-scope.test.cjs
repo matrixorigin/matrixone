@@ -146,7 +146,8 @@ test('scope planning recovers a confirmed throttle and still checks the live rev
   }
 
   for (const [error, expectedWaits, expectedReads] of [
-    [rateLimit, [60_000], 2],
+    [rateLimit, [60_000, 60_000], 3],
+    [Object.assign(new Error('secondary rate limit'), { status: 403 }), [60_000], 2],
     [Object.assign(new Error('Resource not accessible by integration'), { status: 403 }), [], 1],
   ]) {
     const fixture = client();
@@ -160,6 +161,51 @@ test('scope planning recovers a confirmed throttle and still checks the live rev
     assert.deepEqual(waits, expectedWaits);
     assert.equal(reads, expectedReads);
   }
+});
+
+test('a new explicit rate-limit hint can shorten the retry delay', async () => {
+  const fixture = client();
+  const get = fixture.github.rest.pulls.get;
+  const waits = [];
+  const retryAfter = ['60', '5'];
+  fixture.github.rest.pulls.get = async (...args) => {
+    if (retryAfter.length) throw Object.assign(new Error('rate limited'), {
+      status: 429, response: { headers: { 'retry-after': retryAfter.shift() } },
+    });
+    return get(...args);
+  };
+  assert.deepEqual(await resolveScope({ ...fixture, sleep: async ms => waits.push(ms) }),
+    { scope: 'ut', sdk_required: false });
+  assert.deepEqual(waits, [60_000, 5_000]);
+});
+
+test('limited file pagination keeps full CI and still verifies the live revision', async () => {
+  for (const exhausted of [false, true]) {
+    const fixture = client();
+    const get = fixture.github.rest.pulls.get;
+    const calls = [];
+    const headers = exhausted ? { 'x-ratelimit-remaining': '0', 'retry-after': '60' } :
+      { 'retry-after': '121' };
+    fixture.github.rest.pulls.get = async (...args) => {
+      calls.push('revision');
+      return get(...args);
+    };
+    fixture.github.paginate = async () => {
+      calls.push('files');
+      throw Object.assign(new Error('rate limited'), { status: 429, response: { headers } });
+    };
+    assert.deepEqual(await resolveScope({ ...fixture, sleep: async ms => calls.push(ms) }),
+      { scope: 'full', sdk_required: true });
+    assert.deepEqual(calls, exhausted ? ['revision', 'files', 60_000, 'revision'] :
+      ['revision', 'files', 'revision']);
+  }
+});
+
+test('file counts beyond the API cap use full CI without paginating', async () => {
+  const fixture = client();
+  fixture.pr.changed_files = 3000;
+  fixture.github.paginate = async () => assert.fail('capped file list cannot select a narrower plan');
+  assert.deepEqual(await resolveScope(fixture), { scope: 'full', sdk_required: true });
 });
 
 function results() {
