@@ -5,7 +5,7 @@ create external table em_csv (a int, s varchar(20))
 infile{'filepath'='$resources/external_table_file/error_mode.csv'}
 fields terminated by ',' lines terminated by '\n';
 select * from em_csv;
-internal error: the input value 'notanint' is not int32 type for column 0
+internal error: the input value 'notanint' is not INT type for column 0
 desc em_csv;
 ➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -17,15 +17,15 @@ em_csv  ¦  CREATE EXTERNAL TABLE `em_csv` (
   `s` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL
 ) INFILE{'FILEPATH'='$resources/external_table_file/error_mode.csv','FORMAT'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n'
 select a, s from em_csv;
-internal error: the input value 'notanint' is not int32 type for column 0
+internal error: the input value 'notanint' is not INT type for column 0
 select count(*) from em_csv;
-internal error: the input value 'notanint' is not int32 type for column 0
+internal error: the input value 'notanint' is not INT type for column 0
 select a, s, __mo_file_line from em_csv;
-internal error: the input value 'notanint' is not int32 type for column 0
+internal error: the input value 'notanint' is not INT type for column 0
 select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_csv;
 ➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  ¦  __mo_error_text[12,65535,0]  𝄀
 1  ¦  alpha  ¦  1  ¦  null  ¦  null  𝄀
-null  ¦  null  ¦  2  ¦  internal error: the input value 'notanint' is not int32 type for column 0  ¦  notanint,beta  𝄀
+null  ¦  null  ¦  2  ¦  internal error: the input value 'notanint' is not INT type for column 0  ¦  notanint,beta  𝄀
 3  ¦  gamma  ¦  3  ¦  null  ¦  null  𝄀
 4  ¦  delta  ¦  4  ¦  null  ¦  null  𝄀
 5  ¦  epsilon  ¦  5  ¦  null  ¦  null
@@ -42,14 +42,14 @@ select count(*) from (select __mo_error_message from em_csv) t;
 select __mo_error_message from em_csv;
 ➤ __mo_error_message[12,65535,0]  𝄀
 null  𝄀
-internal error: the input value 'notanint' is not int32 type for column 0  𝄀
+internal error: the input value 'notanint' is not INT type for column 0  𝄀
 null  𝄀
 null  𝄀
 null
 select s, __mo_error_message from em_csv;
 ➤ s[12,20,0]  ¦  __mo_error_message[12,65535,0]  𝄀
 alpha  ¦  null  𝄀
-null  ¦  internal error: the input value 'notanint' is not int32 type for column 0  𝄀
+null  ¦  internal error: the input value 'notanint' is not INT type for column 0  𝄀
 gamma  ¦  null  𝄀
 delta  ¦  null  𝄀
 epsilon  ¦  null
@@ -92,18 +92,18 @@ select a, s, __mo_file_line, __mo_error_message from em_multi;
 ➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  𝄀
 1  ¦  al
 pha  ¦  1  ¦  null  𝄀
-null  ¦  null  ¦  3  ¦  internal error: the input value 'notanint' is not int32 type for column 0  𝄀
+null  ¦  null  ¦  3  ¦  internal error: the input value 'notanint' is not INT type for column 0  𝄀
 3  ¦  gamma  ¦  4  ¦  null
 create external table em_json (a int, s varchar(20))
 infile{'filepath'='$resources/external_table_file/error_mode.jsonl', 'format'='jsonline', 'jsondata'='object'};
 select * from em_json;
-internal error: the input value 'notanint' is not int32 type for column 0
+internal error: the input value 'notanint' is not INT type for column 0
 select a, s from em_json;
-internal error: the input value 'notanint' is not int32 type for column 0
+internal error: the input value 'notanint' is not INT type for column 0
 select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_json;
 ➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  ¦  __mo_error_text[12,65535,0]  𝄀
 1  ¦  alpha  ¦  1  ¦  null  ¦  null  𝄀
-null  ¦  null  ¦  2  ¦  internal error: the input value 'notanint' is not int32 type for column 0  ¦  {"a":"notanint","s":"beta"}  𝄀
+null  ¦  null  ¦  2  ¦  internal error: the input value 'notanint' is not INT type for column 0  ¦  {"a":"notanint","s":"beta"}  𝄀
 null  ¦  null  ¦  3  ¦  invalid input: the line is not a well-formed json object  ¦  this is not json  𝄀
 3  ¦  gamma  ¦  4  ¦  null  ¦  null
 create external table em_json_blank (a int, s varchar(20))

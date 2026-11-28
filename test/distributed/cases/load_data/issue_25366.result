@@ -43,7 +43,7 @@ truncate table t_load_temporal;
 load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
 into table t_load_temporal
 fields terminated by ',' lines terminated by '\n' ignore 1 lines;
-internal error: the input value '2024-02-31' is not Date type for column 1
+internal error: the input value '2024-02-31' is not DATE type for column 1
 select count(*) as strict_invalid_date_rows from t_load_temporal;
 ➤ strict_invalid_date_rows[-5,64,0]  𝄀
 0
@@ -51,7 +51,7 @@ truncate table t_load_temporal;
 load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
 into table t_load_temporal
 fields terminated by ',' lines terminated by '\n' ignore 2 lines;
-internal error: the input value '2024-02-31 25:61:61' is not Datetime type for column 2
+internal error: the input value '2024-02-31 25:61:61' is not DATETIME type for column 2
 select count(*) as strict_invalid_datetime_rows from t_load_temporal;
 ➤ strict_invalid_datetime_rows[-5,64,0]  𝄀
 0
@@ -59,7 +59,7 @@ truncate table t_load_temporal;
 load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
 into table t_load_temporal
 fields terminated by ',' lines terminated by '\n' ignore 3 lines;
-internal error: the input value 'not-a-timestamp' is not Timestamp type for column 3
+internal error: the input value 'not-a-timestamp' is not TIMESTAMP type for column 3
 select count(*) as strict_invalid_timestamp_rows from t_load_temporal;
 ➤ strict_invalid_timestamp_rows[-5,64,0]  𝄀
 0
@@ -67,7 +67,7 @@ truncate table t_load_temporal;
 load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
 into table t_load_temporal
 fields terminated by ',' lines terminated by '\n' ignore 6 lines;
-internal error: the input value '1970-01-01 00:00:00' is not Timestamp type for column 3
+internal error: the input value '1970-01-01 00:00:00' is not TIMESTAMP type for column 3
 select count(*) as strict_timestamp_below_minimum_rows from t_load_temporal;
 ➤ strict_timestamp_below_minimum_rows[-5,64,0]  𝄀
 0
@@ -88,7 +88,7 @@ truncate table t_load;
 load data local infile '$resources/load_data/issue_25366_load_data_local_adjusted.csv'
 into table t_load
 fields terminated by ',' lines terminated by '\n';
-internal error: the input value 'abc' is not int32 type for column 1
+internal error: the input value 'abc' is not INT type for column 1
 select count(*) from t_load;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -97,7 +97,7 @@ truncate table t_load;
 load data infile '$resources/load_data/issue_25366_load_data_local_adjusted.csv'
 into table t_load
 fields terminated by ',' lines terminated by '\n';
-internal error: the input value 'abc' is not int32 type for column 1
+internal error: the input value 'abc' is not INT type for column 1
 select count(*) from t_load;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -105,7 +105,7 @@ create table t_quoted_int(id int primary key, i int);
 load data local infile '$resources/load_data/issue_25366_quoted_invalid_int.csv'
 into table t_quoted_int
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
-internal error: the input value 'abc' is not int32 type for column 1
+internal error: the input value 'abc' is not INT type for column 1
 select count(*) from t_quoted_int;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -114,7 +114,7 @@ truncate table t_quoted_int;
 load data local infile '$resources/load_data/issue_25366_quoted_invalid_int.csv'
 into table t_quoted_int
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
-internal error: the input value 'abc' is not int32 type for column 1
+internal error: the input value 'abc' is not INT type for column 1
 select count(*) from t_quoted_int;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -123,7 +123,7 @@ truncate table t_quoted_int;
 load data infile '$resources/load_data/issue_25366_quoted_invalid_int.csv'
 into table t_quoted_int
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
-internal error: the input value 'abc' is not int32 type for column 1
+internal error: the input value 'abc' is not INT type for column 1
 select count(*) from t_quoted_int;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -131,7 +131,7 @@ create table t_quoted_decimal(id int primary key, d decimal(5,2));
 load data local infile '$resources/load_data/issue_25366_quoted_invalid_decimal.csv'
 into table t_quoted_decimal
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
-internal error: the input value '10x' is invalid Decimal64 type for column 1
+internal error: the input value '10x' is not DECIMAL(5,2) type for column 1
 select count(*) from t_quoted_decimal;
 ➤ count(*)[-5,64,0]  𝄀
 0

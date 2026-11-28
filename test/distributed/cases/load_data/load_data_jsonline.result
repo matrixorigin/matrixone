@@ -221,9 +221,9 @@ load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','jsondata'=
 drop table jsonline_t7;
 create table jsonline_t7(col1 float,col2 double,col3 decimal(38,16),col4 decimal(38,16));
 load data infile{'filepath'='$resources/load_data/float_1.json','format'='csv'} into table jsonline_t7 fields terminated by ',';
-internal error: the input value '{"col1": "1.3"' is not float32 type for column 0
+internal error: the input value '{"col1": "1.3"' is not FLOAT type for column 0
 load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t7;
-internal error: the input value 'a' is not float32 type for column 0
+internal error: the input value 'a' is not FLOAT type for column 0
 create table jsonline_t8(
 col1 tinyint not null primary key,
 col2 smallint,

@@ -10,7 +10,7 @@ col7 int unsigned,
 col8 bigint unsigned
 );
 load data infile '$resources/load_data/integer_numbers_4.csv' into table t1 fields terminated by ',';
-internal error: the input value '1.2' is not int8 type for column 0
+internal error: the input value '1.2' is not TINYINT type for column 0
 select * from t1;
 ➤ col1[-6,8,0]  ¦  col2[5,16,0]  ¦  col3[4,32,0]  ¦  col4[-5,64,0]  ¦  col5[-6,8,0]  ¦  col6[5,16,0]  ¦  col7[4,32,0]  ¦  col8[-5,64,0]
 delete from t1;
@@ -210,7 +210,7 @@ null  ¦  null  ¦  null  ¦  null  𝄀
 1.0E-10  ¦  1.0E-10  ¦  0.00  ¦  0.00000
 delete from t3;
 load data infile '$resources/load_data/float_3.csv' into table t3 fields terminated by ',';
-internal error: the input value '1000.001' is invalid Decimal64 type for column 2
+internal error: the input value '1000.001' is not DECIMAL(5,2) type for column 2
 drop table t3;
 drop table if exists double_outfile_src;
 drop table if exists double_outfile_dst;
@@ -305,7 +305,7 @@ null  ¦  null  ¦  null  ¦  null  𝄀
 null  ¦  null  ¦  null  ¦  null
 delete from t4;
 load data infile '$resources/load_data/time_date_5.csv' into table t4 fields terminated by ',';
-internal error: the input value '9999-12-31 23:59:59.999999' is not Datetime type for column 1
+internal error: the input value '9999-12-31 23:59:59.999999' is not DATETIME type for column 1
 select * from t4;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]
 delete from t4;
@@ -772,7 +772,7 @@ select * from load_data_t2 order by id;
 6  ¦   frank  ¦  59
 delete from load_data_t2;
 LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (name, id, age);
-internal error: the input value 'aron' is not int32 type for column 1
+internal error: the input value 'aron' is not INT type for column 1
 LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name );
 invalid input: the data of row 1 contained is not equal to input columns
 select * from load_data_t2 order by id;
@@ -967,7 +967,7 @@ drop table load_data_t9;
 drop table if exists load_data_type;
 create table load_data_type(col1 int);
 load data infile '$resources/load_data/test_int.csv' into table load_data_type fields terminated by ',';
-internal error: the input value '1.9' is not int32 type for column 0
+internal error: the input value '1.9' is not INT type for column 0
 load data infile '$resources/load_data/test_int.csv' into table load_data_type fields terminated by ',' ignore 1 lines;
 select * from load_data_type;
 ➤ col1[4,32,0]  𝄀
